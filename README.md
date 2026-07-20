@@ -1,43 +1,26 @@
 # Fashion Semantic Search
 
-An AI-powered fashion semantic search engine, currently scaffolded as a Python project.
+An AI-powered fashion search engine using semantic embeddings and vector search.
 
-Business logic has intentionally not been implemented yet.
+## Features
 
-## Project structure
+- Natural language search
+- Semantic similarity retrieval
+- Fashion product discovery
 
-```text
-fashion-semantic-search/
-|-- app/
-|-- backend/
-|-- data/
-|-- models/
-|-- scripts/
-|-- assets/
-|-- README.md
-|-- requirements.txt
-`-- .gitignore
-```
+## Roadmap
 
-## Getting started
+- [ ] Dataset integration
+- [ ] Semantic embedding
+- [ ] Vector search
+- [ ] Streamlit UI
+- [ ] Image search
+- [ ] AI stylist
 
-### Windows PowerShell
+## Tech Stack
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-### macOS and Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-## Development status
-
-Initial project scaffold only. Dependencies and implementation will be added as the project evolves.
+- Python
+- FastAPI
+- Streamlit
+- Sentence Transformers
+- FAISS
