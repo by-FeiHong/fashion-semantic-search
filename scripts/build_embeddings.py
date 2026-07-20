@@ -1,10 +1,9 @@
-"""Build normalized text embeddings for a small metadata smoke test."""
+"""Build normalized text embeddings and their aligned metadata index."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +14,9 @@ DEFAULT_INPUT_PATH = Path("data") / "processed" / "metadata.csv"
 DEFAULT_OUTPUT_PATH = Path("data") / "processed" / "embeddings_sample.npy"
 DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_LIMIT = 100
-REQUIRED_COLUMNS = {"color", "description"}
+DEFAULT_BATCH_SIZE = 32
+INDEX_COLUMNS = ("row_id", "image_path", "item_id", "split")
+REQUIRED_COLUMNS = {"image_path", "item_id", "split", "color", "description"}
 
 
 def combine_text(color: str | None, description: str | None) -> str:
@@ -24,10 +25,20 @@ def combine_text(color: str | None, description: str | None) -> str:
     return " ".join(parts)
 
 
-def load_texts(metadata_path: Path, limit: int) -> list[str]:
-    """Load up to ``limit`` combined texts from the processed metadata CSV."""
-    if limit <= 0:
-        raise ValueError("The record limit must be greater than zero.")
+def metadata_index_path(output_path: Path) -> Path:
+    """Return the metadata index path stored beside the embedding output."""
+    return output_path.with_name("metadata_index.csv")
+
+
+def load_records(
+    metadata_path: Path, limit: int
+) -> tuple[list[str], list[dict[str, str | int]]]:
+    """Load embedding texts and aligned index rows from the metadata CSV.
+
+    A limit of zero reads the entire metadata file.
+    """
+    if limit < 0:
+        raise ValueError("The record limit must be zero or greater.")
     if not metadata_path.is_file():
         raise FileNotFoundError(
             f"Metadata CSV was not found: {metadata_path}. "
@@ -42,14 +53,34 @@ def load_texts(metadata_path: Path, limit: int) -> list[str]:
             raise ValueError(
                 f"Metadata CSV is missing required columns: {', '.join(sorted(missing))}"
             )
-        texts = [
-            combine_text(row.get("color"), row.get("description"))
-            for row in islice(reader, limit)
-        ]
+        texts: list[str] = []
+        index_rows: list[dict[str, str | int]] = []
+        for row_id, row in enumerate(reader):
+            if limit and row_id >= limit:
+                break
+            texts.append(combine_text(row.get("color"), row.get("description")))
+            index_rows.append(
+                {
+                    "row_id": row_id,
+                    "image_path": row["image_path"],
+                    "item_id": row["item_id"],
+                    "split": row["split"],
+                }
+            )
 
     if not texts:
         raise ValueError(f"Metadata CSV contains no records: {metadata_path}")
-    return texts
+    return texts, index_rows
+
+
+def write_metadata_index(
+    index_path: Path, index_rows: list[dict[str, str | int]]
+) -> None:
+    """Write metadata rows in exactly the same order as the embeddings."""
+    with index_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=INDEX_COLUMNS)
+        writer.writeheader()
+        writer.writerows(index_rows)
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
     return parser.parse_args()
 
@@ -65,10 +97,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Generate and save normalized sample embeddings."""
     args = parse_args()
-    texts = load_texts(args.input, args.limit)
+    if args.batch_size <= 0:
+        raise ValueError("The batch size must be greater than zero.")
+
+    texts, index_rows = load_records(args.input, args.limit)
     model = SentenceTransformer(args.model)
     embeddings = model.encode(
         texts,
+        batch_size=args.batch_size,
         convert_to_numpy=True,
         normalize_embeddings=True,
         show_progress_bar=True,
@@ -77,10 +113,16 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.save(args.output, embeddings)
+    index_path = metadata_index_path(args.output)
+    write_metadata_index(index_path, index_rows)
+
+    if embeddings.shape[0] != len(index_rows):
+        raise RuntimeError("Embedding and metadata index row counts do not match.")
 
     print(f"Records embedded: {embeddings.shape[0]:,}")
     print(f"Embedding dimension: {embeddings.shape[1]:,}")
     print(f"Output: {args.output.resolve()}")
+    print(f"Metadata index: {index_path.resolve()}")
 
 
 if __name__ == "__main__":
