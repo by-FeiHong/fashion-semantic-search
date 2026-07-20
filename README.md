@@ -52,5 +52,21 @@ python scripts/build_embeddings.py
 
 The script combines each product's color and description, generates normalized
 text embeddings with `sentence-transformers/all-MiniLM-L6-v2`, and writes the
-sample array to `data/processed/embeddings_sample.npy`. It intentionally processes
-only the first 100 metadata records; full-dataset embedding is a later step.
+array plus its aligned `metadata_index.csv` file to `data/processed/`.
+
+For example, generate a 1,000-record development index:
+
+```powershell
+python scripts/build_embeddings.py --limit 1000 --output data/processed/embeddings_1000.npy
+```
+
+Use `--limit 0` to process the complete metadata file.
+
+## Vector Search
+
+Build an exact cosine-similarity FAISS index and run a natural-language query:
+
+```powershell
+python scripts/build_index.py
+python scripts/search.py "minimal black dress" --top-k 5
+```
