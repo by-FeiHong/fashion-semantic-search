@@ -107,6 +107,11 @@ Build a visual index with one representative image for each distinct product:
 python scripts/build_clip_index.py --batch-size 32
 ```
 
+The builder can also create an experimental per-item average of up to four
+distinct views with `--views-per-item 4`. This is not the app default: on the
+current benchmark, equal-weight view averaging performs worse than using the
+best representative image.
+
 The Streamlit app automatically offers the CLIP-backed **Visual** search lens
 when `fashion_clip.index` and `clip_metadata.csv` are present. The original
 MiniLM description search remains available as the **Description** lens. The
@@ -120,4 +125,12 @@ encoding, or fusion weights:
 
 ```powershell
 python scripts/evaluate_search.py
+```
+
+To evaluate a candidate visual index before switching the app:
+
+```powershell
+python scripts/evaluate_search.py `
+  --clip-index data/processed/fashion_clip_multiview.index `
+  --clip-metadata data/processed/clip_multiview_metadata.csv
 ```

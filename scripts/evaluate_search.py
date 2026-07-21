@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 from pathlib import Path
 
@@ -26,6 +27,21 @@ TOP_K = 5
 CANDIDATES = 40
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--clip-index",
+        type=Path,
+        default=Path("data/processed/fashion_clip.index"),
+    )
+    parser.add_argument(
+        "--clip-metadata",
+        type=Path,
+        default=Path("data/processed/clip_metadata.csv"),
+    )
+    return parser.parse_args()
+
+
 def category(image_path: str) -> str:
     """Extract the DeepFashion garment category from an image path."""
     parts = Path(image_path).parts
@@ -42,9 +58,10 @@ def precision(results: list[dict[str, str | float]], expected: set[str]) -> floa
 
 
 def main() -> None:
+    args = parse_args()
     root = Path("data/processed")
-    clip_index = faiss.read_index(str(root / "fashion_clip.index"))
-    clip_metadata = load_metadata(root / "clip_metadata.csv")
+    clip_index = faiss.read_index(str(args.clip_index))
+    clip_metadata = load_metadata(args.clip_metadata)
     text_index = faiss.read_index(str(root / "fashion.index"))
     text_metadata = load_metadata(root / "metadata_index.csv")
     with (root / "metadata.csv").open(encoding="utf-8", newline="") as file:
