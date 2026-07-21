@@ -10,7 +10,7 @@ import faiss
 import numpy as np
 
 
-DEFAULT_EMBEDDINGS_PATH = Path("data") / "processed" / "embeddings_1000.npy"
+DEFAULT_EMBEDDINGS_PATH = Path("data") / "processed" / "embeddings_full.npy"
 DEFAULT_METADATA_PATH = Path("data") / "processed" / "metadata_index.csv"
 DEFAULT_OUTPUT_PATH = Path("data") / "processed" / "fashion.index"
 

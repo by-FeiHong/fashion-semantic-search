@@ -1,4 +1,6 @@
 faiss-cpu
 numpy
+pillow
 sentence-transformers
+streamlit
 torch

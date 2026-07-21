@@ -1,0 +1,26 @@
+[theme]
+base = "light"
+primaryColor = "#242522"
+backgroundColor = "#EAE8E1"
+secondaryBackgroundColor = "#DCDAD2"
+textColor = "#20211F"
+borderColor = "#AAA99F"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "none"
+buttonRadius = "none"
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wdth,wght@75,300;75,400;75,500;100,400&display=swap"
+headingFont = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wdth,wght@75,300;75,400;75,500&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["64px", "24px", "18px", "14px", "12px", "11px"]
+headingFontWeights = [300, 400, 400, 500, 500, 500]
+linkUnderline = false
+
+[theme.sidebar]
+backgroundColor = "#20211F"
+secondaryBackgroundColor = "#30312E"
+textColor = "#EAE8E1"
+borderColor = "#4B4C47"
+primaryColor = "#C8C6BD"

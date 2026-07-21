@@ -88,9 +88,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument(
+        "--metadata-output",
+        type=Path,
+        help="Aligned metadata CSV (defaults to metadata_index.csv beside embeddings)",
+    )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
+    parser.add_argument(
+        "--allow-download",
+        action="store_true",
+        help="Allow downloading model files instead of requiring the local cache",
+    )
     return parser.parse_args()
 
 
@@ -101,7 +111,10 @@ def main() -> None:
         raise ValueError("The batch size must be greater than zero.")
 
     texts, index_rows = load_records(args.input, args.limit)
-    model = SentenceTransformer(args.model)
+    model = SentenceTransformer(
+        args.model,
+        local_files_only=not args.allow_download,
+    )
     embeddings = model.encode(
         texts,
         batch_size=args.batch_size,
@@ -113,7 +126,8 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.save(args.output, embeddings)
-    index_path = metadata_index_path(args.output)
+    index_path = args.metadata_output or metadata_index_path(args.output)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     write_metadata_index(index_path, index_rows)
 
     if embeddings.shape[0] != len(index_rows):

@@ -54,7 +54,7 @@ The script combines each product's color and description, generates normalized
 text embeddings with `sentence-transformers/all-MiniLM-L6-v2`, and writes the
 array plus its aligned `metadata_index.csv` file to `data/processed/`.
 
-For example, generate a 1,000-record development index:
+For example, generate a 1,000-record development embedding file:
 
 ```powershell
 python scripts/build_embeddings.py --limit 1000 --output data/processed/embeddings_1000.npy
@@ -62,11 +62,62 @@ python scripts/build_embeddings.py --limit 1000 --output data/processed/embeddin
 
 Use `--limit 0` to process the complete metadata file.
 
+To build the complete application archive without overwriting the active metadata
+during encoding:
+
+```powershell
+python scripts/build_embeddings.py --limit 0 --batch-size 64 `
+  --output data/processed/embeddings_full.npy `
+  --metadata-output data/processed/metadata_index_full.csv
+python scripts/build_index.py `
+  --embeddings data/processed/embeddings_full.npy `
+  --metadata data/processed/metadata_index_full.csv `
+  --output data/processed/fashion_full.index
+```
+
 ## Vector Search
 
-Build an exact cosine-similarity FAISS index and run a natural-language query:
+The active app files are `fashion.index` and `metadata_index.csv`. Build an exact
+cosine-similarity FAISS index and run a natural-language query:
 
 ```powershell
 python scripts/build_index.py
 python scripts/search.py "minimal black dress" --top-k 5
+```
+
+## Streamlit MVP
+
+The app uses `D:\Datasets\DeepFashion\In-shop` by default. To use another
+location, set `DEEPFASHION_ROOT` before launching it:
+
+```powershell
+$env:DEEPFASHION_ROOT = "D:\Datasets\DeepFashion\In-shop"
+streamlit run app.py
+```
+
+Enter a natural-language description, choose the number of distinct products,
+and select **Search**. The app displays each item's similarity score, metadata,
+and DeepFashion image.
+
+## CLIP visual search
+
+Build a visual index with one representative image for each distinct product:
+
+```powershell
+python scripts/build_clip_index.py --batch-size 32
+```
+
+The Streamlit app automatically offers the CLIP-backed **Visual** search lens
+when `fashion_clip.index` and `clip_metadata.csv` are present. The original
+MiniLM description search remains available as the **Description** lens. The
+optional **Hybrid** lens combines both rankings with 70% visual and 30%
+description weight using weighted reciprocal rank fusion. Visual remains the
+default because it performs as well as hybrid on the current fixed benchmark
+while loading one model instead of two.
+
+Run the fixed category-level retrieval benchmark after changing models, query
+encoding, or fusion weights:
+
+```powershell
+python scripts/evaluate_search.py
 ```
