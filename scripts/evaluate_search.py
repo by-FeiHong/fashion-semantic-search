@@ -11,7 +11,12 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from fusion import fuse_ranked_results
-from search import DEFAULT_MODEL_NAME, load_metadata, search_text
+from search import (
+    DEFAULT_MODEL_NAME,
+    load_metadata,
+    search_text,
+    search_unique_items,
+)
 
 
 CLIP_MODEL_NAME = "sentence-transformers/clip-ViT-B-32"
@@ -75,12 +80,15 @@ def main() -> None:
     print("-" * 62)
     for query, expected in CASES:
         vector = clip_model.encode([query], normalize_embeddings=True)
-        scores, ids = clip_index.search(
-            np.ascontiguousarray(vector, dtype=np.float32), CANDIDATES
+        ranked_vectors = search_unique_items(
+            clip_index,
+            np.ascontiguousarray(vector, dtype=np.float32),
+            clip_metadata,
+            CANDIDATES,
         )
         visual = [
-            {**clip_metadata[int(vector_id)], "score": float(score)}
-            for score, vector_id in zip(scores[0], ids[0])
+            {**clip_metadata[vector_id], "score": score}
+            for score, vector_id in ranked_vectors
         ]
         raw_text = search_text(
             query, CANDIDATES, text_index, text_metadata, text_model

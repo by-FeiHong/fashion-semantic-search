@@ -107,6 +107,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--views-per-item", type=int, default=1)
+    parser.add_argument(
+        "--index-mode",
+        choices=("item-average", "view-max"),
+        default="item-average",
+        help="Average views per item or index each view for max-score item retrieval",
+    )
     parser.add_argument("--allow-download", action="store_true")
     return parser.parse_args()
 
@@ -118,7 +124,7 @@ def main() -> None:
     selections = select_item_views(args.input, args.views_per_item, args.limit)
     if not selections:
         raise ValueError("No representative product images were found.")
-    rows = [representative for representative, _ in selections]
+    item_rows = [representative for representative, _ in selections]
     image_tasks = [
         (item_index, image_path)
         for item_index, (_, image_paths) in enumerate(selections)
@@ -129,8 +135,11 @@ def main() -> None:
     dimension = model.get_embedding_dimension()
     args.embeddings.parent.mkdir(parents=True, exist_ok=True)
     partial_path = args.embeddings.with_suffix(args.embeddings.suffix + ".partial")
-    sums = np.zeros((len(rows), dimension), dtype=np.float32)
-    counts = np.zeros(len(rows), dtype=np.int32)
+    if args.index_mode == "view-max":
+        embeddings = np.empty((len(image_tasks), dimension), dtype=np.float32)
+    else:
+        sums = np.zeros((len(item_rows), dimension), dtype=np.float32)
+        counts = np.zeros(len(item_rows), dtype=np.int32)
 
     started = time.perf_counter()
     for start in range(0, len(image_tasks), args.batch_size):
@@ -147,9 +156,12 @@ def main() -> None:
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )
-            item_indices = np.asarray([item_index for item_index, _ in batch_tasks])
-            np.add.at(sums, item_indices, vectors)
-            np.add.at(counts, item_indices, 1)
+            if args.index_mode == "view-max":
+                embeddings[start : start + len(batch_tasks)] = vectors
+            else:
+                item_indices = np.asarray([item_index for item_index, _ in batch_tasks])
+                np.add.at(sums, item_indices, vectors)
+                np.add.at(counts, item_indices, 1)
         finally:
             for image in images:
                 image.close()
@@ -161,9 +173,18 @@ def main() -> None:
             flush=True,
         )
 
-    embeddings = sums / counts[:, None]
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    embeddings = np.ascontiguousarray(embeddings / np.maximum(norms, 1e-12), dtype=np.float32)
+    if args.index_mode == "view-max":
+        rows = [
+            {**item_rows[item_index], "image_path": image_path}
+            for item_index, image_path in image_tasks
+        ]
+    else:
+        embeddings = sums / counts[:, None]
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        embeddings = np.ascontiguousarray(
+            embeddings / np.maximum(norms, 1e-12), dtype=np.float32
+        )
+        rows = item_rows
     np.save(partial_path, embeddings)
     generated_partial_path = partial_path.with_suffix(partial_path.suffix + ".npy")
     if generated_partial_path.is_file():
@@ -175,7 +196,8 @@ def main() -> None:
     index = faiss.IndexFlatIP(vectors.shape[1])
     index.add(vectors)
     faiss.write_index(index, str(args.index))
-    print(f"Items indexed: {index.ntotal:,}")
+    print(f"Vectors indexed: {index.ntotal:,}")
+    print(f"Distinct items: {len(item_rows):,}")
     print(f"Views encoded: {len(image_tasks):,}")
     print(f"Embedding dimension: {index.d:,}")
     print(f"Index: {args.index.resolve()}")

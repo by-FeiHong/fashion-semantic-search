@@ -13,7 +13,12 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer
 
 from scripts.fusion import fuse_ranked_results
-from scripts.search import DEFAULT_MODEL_NAME, load_metadata, search_text
+from scripts.search import (
+    DEFAULT_MODEL_NAME,
+    load_metadata,
+    search_text,
+    search_unique_items,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -122,13 +127,15 @@ def run_search(query: str, top_k: int, search_lens: str) -> None:
                 [query.strip()], convert_to_numpy=True, normalize_embeddings=True
             )
             candidate_count = max(top_k, 40) if search_lens == "Hybrid" else top_k
-            scores, vector_ids = index.search(
-                np.ascontiguousarray(query_vector, dtype=np.float32), candidate_count
+            ranked_vectors = search_unique_items(
+                index,
+                np.ascontiguousarray(query_vector, dtype=np.float32),
+                metadata,
+                candidate_count,
             )
             visual_results = [
-                {**metadata[int(vector_id)], "score": float(score)}
-                for score, vector_id in zip(scores[0], vector_ids[0])
-                if int(vector_id) >= 0
+                {**metadata[vector_id], "score": score}
+                for score, vector_id in ranked_vectors
             ]
         if search_lens in {"Description", "Hybrid"}:
             index, metadata, model = load_search_resources(

@@ -112,6 +112,21 @@ distinct views with `--views-per-item 4`. This is not the app default: on the
 current benchmark, equal-weight view averaging performs worse than using the
 best representative image.
 
+For max-score multi-view retrieval, keep each view as an independent vector and
+deduplicate by item at query time:
+
+```powershell
+python scripts/build_clip_index.py --views-per-item 4 --index-mode view-max `
+  --batch-size 32 `
+  --embeddings data/processed/clip_viewmax_embeddings.npy `
+  --metadata data/processed/clip_viewmax_metadata.csv `
+  --index data/processed/fashion_clip_viewmax.index
+```
+
+On the current fixed benchmark, view-max ties the representative-image Visual
+score but uses roughly four times as many vectors, so it remains an experimental
+candidate rather than the app default.
+
 The Streamlit app automatically offers the CLIP-backed **Visual** search lens
 when `fashion_clip.index` and `clip_metadata.csv` are present. The original
 MiniLM description search remains available as the **Description** lens. The
