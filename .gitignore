@@ -16,6 +16,7 @@ env/
 # Packaging and build output
 build/
 dist/
+target/
 *.egg-info/
 
 # Environment variables and local configuration
@@ -33,6 +34,7 @@ Thumbs.db
 *.log
 *.tmp
 *.swp
+target/
 
 # Local data and model artifacts (keep directory placeholders)
 data/*

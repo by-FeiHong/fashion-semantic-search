@@ -1,0 +1,8 @@
+server:
+  port: 8080
+
+fashion-search:
+  python:
+    executable: ${PYTHON_EXECUTABLE:../.venv/Scripts/python.exe}
+    project-root: ${FASHION_SEARCH_PROJECT_ROOT:..}
+    timeout-seconds: 30

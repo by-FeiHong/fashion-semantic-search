@@ -127,13 +127,8 @@ On the current fixed benchmark, view-max ties the representative-image Visual
 score but uses roughly four times as many vectors, so it remains an experimental
 candidate rather than the app default.
 
-The Streamlit app automatically offers the CLIP-backed **Visual** search lens
-when `fashion_clip.index` and `clip_metadata.csv` are present. The original
-MiniLM description search remains available as the **Description** lens. The
-optional **Hybrid** lens combines both rankings with 70% visual and 30%
-description weight using weighted reciprocal rank fusion. Visual remains the
-default because it performs as well as hybrid on the current fixed benchmark
-while loading one model instead of two.
+The CLIP and hybrid-search scripts are experimental. The current Streamlit MVP
+intentionally uses the stable MiniLM text-search path only.
 
 Run the fixed category-level retrieval benchmark after changing models, query
 encoding, or fusion weights:
@@ -149,3 +144,52 @@ python scripts/evaluate_search.py `
   --clip-index data/processed/fashion_clip_multiview.index `
   --clip-metadata data/processed/clip_multiview_metadata.csv
 ```
+
+## Java backend
+
+The `java-backend/` module is a Spring Boot 3 application using Maven and
+Java 17. It keeps the web API and service layers in Java while reusing the
+existing Python embedding and FAISS search through a small CLI adapter.
+
+```text
+Client
+  -> Spring Boot controller
+  -> Search service
+  -> Python CLI adapter
+  -> Sentence Transformer + FAISS
+  -> DeepFashion metadata and images
+```
+
+Run the backend after installing Java 17 and Maven:
+
+```powershell
+cd java-backend
+mvn spring-boot:run
+```
+
+If the repository is not in the default location, configure the adapter:
+
+```powershell
+$env:FASHION_SEARCH_PROJECT_ROOT = "D:\Projects\fashion-semantic-search"
+$env:PYTHON_EXECUTABLE = "D:\Projects\fashion-semantic-search\.venv\Scripts\python.exe"
+mvn spring-boot:run
+```
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/health
+```
+
+Text search:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/search `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"minimal black dress","topK":5}'
+```
+
+Both endpoints return a consistent response envelope containing `success`,
+`data`, `message`, and `timestamp`. Validation and adapter failures are
+converted into structured HTTP error responses.
