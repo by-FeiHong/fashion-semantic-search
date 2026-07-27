@@ -1,4 +1,4 @@
-package com.feihong.fashionsearch.common;
+package com.feihong.fashionsearch.exception;
 
 public class SearchServiceException extends RuntimeException {
     public SearchServiceException(String message) {
