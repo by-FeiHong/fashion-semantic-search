@@ -11,14 +11,23 @@ import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.feihong.fashionsearch.config.PythonSearchProperties;
 import com.feihong.fashionsearch.dto.SearchResult;
-import com.feihong.fashionsearch.exception.SearchServiceException;
+import com.feihong.fashionsearch.exception.PythonJsonParseException;
+import com.feihong.fashionsearch.exception.PythonNonZeroExitException;
+import com.feihong.fashionsearch.exception.PythonProcessStartException;
+import com.feihong.fashionsearch.exception.PythonSearchInterruptedException;
+import com.feihong.fashionsearch.exception.PythonSearchTimeoutException;
 
 @Component
-public class PythonSearchAdapter {
+public class PythonSearchAdapter implements SearchEnginePort {
+    private static final Logger log =
+            LoggerFactory.getLogger(PythonSearchAdapter.class);
+
     private final PythonSearchProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -30,44 +39,97 @@ public class PythonSearchAdapter {
         this.objectMapper = objectMapper;
     }
 
+    @Override
     public List<SearchResult> search(String query, int topK) {
         Path root = Path.of(properties.projectRoot()).toAbsolutePath().normalize();
+        Path script = root.resolve(properties.searchScript()).normalize();
         ProcessBuilder builder = new ProcessBuilder(
                 properties.executable(),
-                "scripts/search.py",
+                script.toString(),
                 query,
                 "--top-k",
                 String.valueOf(topK),
                 "--json"
         );
         builder.directory(root.toFile());
+        long startedAt = System.nanoTime();
+        log.info("event=python_search_started query=\"{}\" topK={}",
+                query, topK);
 
         try {
             Process process = builder.start();
             CompletableFuture<String> stdoutFuture = readStream(process.getInputStream());
             CompletableFuture<String> stderrFuture = readStream(process.getErrorStream());
-            if (!process.waitFor(properties.timeoutSeconds(), TimeUnit.SECONDS)) {
+            if (!process.waitFor(properties.timeout().toMillis(),
+                    TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
-                throw new SearchServiceException("Python search timed out.");
-            }
-            String stdout = stdoutFuture.join();
-            String stderr = stderrFuture.join();
-            if (process.exitValue() != 0) {
-                throw new SearchServiceException(
-                        "Python search failed: " + stderr.strip()
+                log.warn(
+                        "event=python_search_failed query=\"{}\" topK={} "
+                                + "durationMs={} errorType=timeout",
+                        query, topK, elapsedMillis(startedAt)
+                );
+                throw new PythonSearchTimeoutException(
+                        "The AI search engine timed out."
                 );
             }
-            return parseResults(stdout);
+            String stdout = stdoutFuture.join();
+            stderrFuture.join();
+            if (process.exitValue() != 0) {
+                log.warn(
+                        "event=python_search_failed query=\"{}\" topK={} "
+                                + "durationMs={} errorType=non_zero_exit exitCode={}",
+                        query, topK, elapsedMillis(startedAt),
+                        process.exitValue()
+                );
+                throw new PythonNonZeroExitException(
+                        "The AI search engine failed.", process.exitValue()
+                );
+            }
+            List<SearchResult> results;
+            try {
+                results = parseResults(stdout);
+            } catch (PythonJsonParseException exception) {
+                log.warn(
+                        "event=python_search_failed query=\"{}\" topK={} "
+                                + "durationMs={} errorType=invalid_json",
+                        query, topK, elapsedMillis(startedAt)
+                );
+                throw exception;
+            }
+            log.info(
+                    "event=python_search_succeeded query=\"{}\" topK={} "
+                            + "resultCount={} durationMs={}",
+                    query, topK, results.size(), elapsedMillis(startedAt)
+            );
+            return results;
         } catch (IOException exception) {
-            throw new SearchServiceException(
-                    "Unable to start the configured Python search process.", exception
+            log.warn(
+                    "event=python_search_failed query=\"{}\" topK={} "
+                            + "durationMs={} errorType=start_failure",
+                    query, topK, elapsedMillis(startedAt)
+            );
+            throw new PythonProcessStartException(
+                    "The AI search engine could not be started.", exception
             );
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new SearchServiceException("Python search was interrupted.", exception);
+            log.warn(
+                    "event=python_search_failed query=\"{}\" topK={} "
+                            + "durationMs={} errorType=interrupted",
+                    query, topK, elapsedMillis(startedAt)
+            );
+            throw new PythonSearchInterruptedException(
+                    "The AI search request was interrupted.", exception
+            );
         } catch (CompletionException exception) {
-            throw new SearchServiceException(
-                    "Unable to read the Python search output.", exception.getCause()
+            log.warn(
+                    "event=python_search_failed query=\"{}\" topK={} "
+                            + "durationMs={} errorType=output_read_failure",
+                    query, topK, elapsedMillis(startedAt)
+            );
+            throw new PythonProcessStartException(
+                    "The AI search engine output could not be read.",
+                    exception.getCause()
             );
         }
     }
@@ -86,9 +148,13 @@ public class PythonSearchAdapter {
         try {
             return Arrays.asList(objectMapper.readValue(output, SearchResult[].class));
         } catch (JsonProcessingException exception) {
-            throw new SearchServiceException(
-                    "Python search returned invalid JSON.", exception
+            throw new PythonJsonParseException(
+                    "The AI search engine returned an invalid response.", exception
             );
         }
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000;
     }
 }

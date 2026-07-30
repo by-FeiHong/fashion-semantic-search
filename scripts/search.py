@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 import faiss
@@ -13,6 +14,7 @@ from sentence_transformers import SentenceTransformer
 
 DEFAULT_INDEX_PATH = Path("data") / "processed" / "fashion.index"
 DEFAULT_METADATA_PATH = Path("data") / "processed" / "metadata_index.csv"
+DEFAULT_DETAILS_PATH = Path("data") / "processed" / "metadata.csv"
 DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -22,6 +24,29 @@ def load_metadata(path: Path) -> list[dict[str, str]]:
         raise FileNotFoundError(f"Metadata index was not found: {path}")
     with path.open(encoding="utf-8", newline="") as file:
         return list(csv.DictReader(file))
+
+
+def enrich_metadata(
+    metadata: list[dict[str, str]], details_path: Path
+) -> list[dict[str, str]]:
+    """Add display fields omitted from the compact vector-alignment metadata."""
+    if not details_path.is_file() or not metadata:
+        return metadata
+    if {"color", "description"}.issubset(metadata[0]):
+        return metadata
+
+    details = {
+        row["image_path"]: row
+        for row in load_metadata(details_path)
+    }
+    return [
+        {
+            **row,
+            "color": details.get(row["image_path"], {}).get("color", ""),
+            "description": details.get(row["image_path"], {}).get("description", ""),
+        }
+        for row in metadata
+    ]
 
 
 def search_unique_items(
@@ -92,8 +117,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("query", help="Natural-language fashion search query")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON while preserving the default CLI output",
+    )
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX_PATH)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA_PATH)
+    parser.add_argument("--details", type=Path, default=DEFAULT_DETAILS_PATH)
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
     parser.add_argument(
         "--allow-download",
@@ -112,7 +143,7 @@ def main() -> None:
         raise FileNotFoundError(f"FAISS index was not found: {args.index}")
 
     index = faiss.read_index(str(args.index))
-    metadata = load_metadata(args.metadata)
+    metadata = enrich_metadata(load_metadata(args.metadata), args.details)
     if index.ntotal != len(metadata):
         raise ValueError(
             f"FAISS and metadata counts do not match: {index.ntotal:,} != "
@@ -124,6 +155,10 @@ def main() -> None:
         local_files_only=not args.allow_download,
     )
     results = search_text(args.query, args.top_k, index, metadata, model)
+
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False))
+        return
 
     print(f'Query: "{args.query}"')
     print(f"Top {len(results)} unique items:\n")

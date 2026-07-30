@@ -155,10 +155,16 @@ existing Python embedding and FAISS search through a small CLI adapter.
 Client
   -> Spring Boot controller
   -> Search service
+  -> SearchEnginePort
   -> Python CLI adapter
   -> Sentence Transformer + FAISS
   -> DeepFashion metadata and images
 ```
+
+The Java backend follows a ports-and-adapters boundary: business logic depends
+on `SearchEnginePort`, while `PythonSearchAdapter` owns process execution and
+JSON translation. This keeps the service independent of the current Python
+implementation and makes it straightforward to test or replace.
 
 Run the backend after installing Java 17 and Maven:
 
@@ -167,13 +173,34 @@ cd java-backend
 mvn spring-boot:run
 ```
 
-If the repository is not in the default location, configure the adapter:
+The adapter is configured in
+`java-backend/src/main/resources/application.yml`:
+
+```yaml
+fashion-search:
+  python:
+    executable: ${PYTHON_EXECUTABLE:../.venv/Scripts/python.exe}
+    project-root: ${FASHION_SEARCH_PROJECT_ROOT:..}
+    search-script: ${FASHION_SEARCH_SCRIPT:scripts/search.py}
+    timeout: ${FASHION_SEARCH_TIMEOUT:30s}
+```
+
+Environment variables can override every deployment-specific value:
 
 ```powershell
 $env:FASHION_SEARCH_PROJECT_ROOT = "D:\Projects\fashion-semantic-search"
 $env:PYTHON_EXECUTABLE = "D:\Projects\fashion-semantic-search\.venv\Scripts\python.exe"
+$env:FASHION_SEARCH_SCRIPT = "scripts/search.py"
+$env:FASHION_SEARCH_TIMEOUT = "30s"
 mvn spring-boot:run
 ```
+
+Structured logs cover controller, service, and adapter boundaries with the
+query, `topK`, elapsed time, outcome, and safe error category. Python stderr and
+exception stack traces are deliberately excluded from request-failure logs.
+Adapter failures use the same response envelope as validation failures:
+timeouts return HTTP 504, process startup/non-zero exit/invalid JSON return
+HTTP 502, and interrupted requests return HTTP 503.
 
 Health check:
 
@@ -188,6 +215,15 @@ Invoke-RestMethod http://localhost:8080/api/search `
   -Method Post `
   -ContentType "application/json" `
   -Body '{"query":"minimal black dress","topK":5}'
+```
+
+Equivalent `curl` examples:
+
+```powershell
+curl.exe http://localhost:8080/api/health
+curl.exe -X POST http://localhost:8080/api/search `
+  -H "Content-Type: application/json" `
+  -d '{\"query\":\"minimal black dress\",\"topK\":5}'
 ```
 
 Both endpoints return a consistent response envelope containing `success`,

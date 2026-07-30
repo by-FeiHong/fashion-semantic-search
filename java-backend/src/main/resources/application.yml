@@ -5,4 +5,5 @@ fashion-search:
   python:
     executable: ${PYTHON_EXECUTABLE:../.venv/Scripts/python.exe}
     project-root: ${FASHION_SEARCH_PROJECT_ROOT:..}
-    timeout-seconds: 30
+    search-script: ${FASHION_SEARCH_SCRIPT:scripts/search.py}
+    timeout: ${FASHION_SEARCH_TIMEOUT:30s}
