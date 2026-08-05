@@ -229,3 +229,41 @@ curl.exe -X POST http://localhost:8080/api/search `
 Both endpoints return a consistent response envelope containing `success`,
 `data`, `message`, and `timestamp`. Validation and adapter failures are
 converted into structured HTTP error responses.
+
+### Redis search cache
+
+The Spring Boot service uses a Cache-Aside flow through a technology-neutral
+`CachePort`. Search keys use the prefix `fashion-search:search:v1`, a SHA-256
+digest of the normalized query, and `topK`. Query text is not stored in keys or
+logs. A cache hit skips the Python/FAISS process; a miss calls the search engine
+and stores the result for 10 minutes by default.
+
+Redis is an optional performance dependency. Read or write failures are logged
+with a safe query digest and automatically fall back to the normal
+`SearchEnginePort`, so `/api/search` remains available when Redis is offline.
+
+Configuration:
+
+```yaml
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
+      timeout: ${REDIS_COMMAND_TIMEOUT:1s}
+
+fashion-search:
+  cache:
+    key-prefix: ${FASHION_SEARCH_CACHE_PREFIX:fashion-search:search:v1}
+    ttl: ${FASHION_SEARCH_CACHE_TTL:10m}
+```
+
+Start only Redis with Docker:
+
+```powershell
+docker run --name fashion-search-redis --rm -p 6379:6379 redis:7-alpine
+```
+
+The backend can also run without Redis; searches then use the Python FAISS
+engine directly.

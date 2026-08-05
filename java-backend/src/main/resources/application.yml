@@ -1,9 +1,20 @@
 server:
   port: 8080
 
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
+      timeout: ${REDIS_COMMAND_TIMEOUT:1s}
+
 fashion-search:
   python:
     executable: ${PYTHON_EXECUTABLE:../.venv/Scripts/python.exe}
     project-root: ${FASHION_SEARCH_PROJECT_ROOT:..}
     search-script: ${FASHION_SEARCH_SCRIPT:scripts/search.py}
     timeout: ${FASHION_SEARCH_TIMEOUT:30s}
+  cache:
+    key-prefix: ${FASHION_SEARCH_CACHE_PREFIX:fashion-search:search:v1}
+    ttl: ${FASHION_SEARCH_CACHE_TTL:10m}
