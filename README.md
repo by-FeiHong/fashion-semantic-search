@@ -267,3 +267,46 @@ docker run --name fashion-search-redis --rm -p 6379:6379 redis:7-alpine
 
 The backend can also run without Redis; searches then use the Python FAISS
 engine directly.
+
+### MySQL search history infrastructure
+
+Sprint 6 adds the JPA entity and repository for the `search_history` table.
+Search requests are not persisted yet, so the existing `/api/search`, Redis,
+and Python behavior is unchanged.
+
+Start a local MySQL 8 instance with Docker:
+
+```powershell
+docker run --name fashion-search-mysql --rm `
+  -e MYSQL_DATABASE=fashion_search `
+  -e MYSQL_USER=fashion_search `
+  -e MYSQL_PASSWORD=fashion_search `
+  -e MYSQL_ROOT_PASSWORD=change-me `
+  -p 3306:3306 `
+  mysql:8.4
+```
+
+The connection settings support environment variables (the values below are
+also the development defaults):
+
+```powershell
+$env:MYSQL_HOST = "localhost"
+$env:MYSQL_PORT = "3306"
+$env:MYSQL_DATABASE = "fashion_search"
+$env:MYSQL_USERNAME = "fashion_search"
+$env:MYSQL_PASSWORD = "fashion_search"
+cd java-backend
+mvn spring-boot:run
+```
+
+Hibernate creates or updates `search_history` at application startup and keeps
+indexes on the search query and creation time. For production deployments, set
+a strong password and manage schema changes with a migration tool.
+
+Java tests use an in-memory H2 database in MySQL compatibility mode and do not
+require MySQL, Redis, or the Python search process:
+
+```powershell
+cd java-backend
+mvn test
+```
