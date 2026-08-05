@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import com.feihong.fashionsearch.dto.SearchRequest;
 import com.feihong.fashionsearch.dto.SearchResult;
+import com.feihong.fashionsearch.history.SearchHistoryPort;
 
 @Service
 public class PythonCliSearchService implements SearchService {
@@ -18,10 +19,16 @@ public class PythonCliSearchService implements SearchService {
 
     private final SearchEnginePort searchEngine;
     private final CachePort cache;
+    private final SearchHistoryPort searchHistory;
 
-    public PythonCliSearchService(SearchEnginePort searchEngine, CachePort cache) {
+    public PythonCliSearchService(
+            SearchEnginePort searchEngine,
+            CachePort cache,
+            SearchHistoryPort searchHistory
+    ) {
         this.searchEngine = searchEngine;
         this.cache = cache;
+        this.searchHistory = searchHistory;
     }
 
     @Override
@@ -38,10 +45,12 @@ public class PythonCliSearchService implements SearchService {
             );
             if (cachedResults.isPresent()) {
                 List<SearchResult> results = cachedResults.get();
+                long durationMs = elapsedMillis(startedAt);
+                saveHistory(query, queryHash, topK, durationMs, true);
                 log.info(
                         "event=search_cache_hit queryHash={} topK={} "
                                 + "resultCount={} durationMs={}",
-                        queryHash, topK, results.size(), elapsedMillis(startedAt)
+                        queryHash, topK, results.size(), durationMs
                 );
                 return results;
             }
@@ -49,10 +58,12 @@ public class PythonCliSearchService implements SearchService {
                     queryHash, topK, elapsedMillis(startedAt));
             List<SearchResult> results = searchEngine.search(query, topK);
             writeCache(query, queryHash, topK, results);
+            long durationMs = elapsedMillis(startedAt);
+            saveHistory(query, queryHash, topK, durationMs, false);
             log.info(
                     "event=search_service_succeeded queryHash={} topK={} "
                             + "resultCount={} durationMs={}",
-                    queryHash, topK, results.size(), elapsedMillis(startedAt)
+                    queryHash, topK, results.size(), durationMs
             );
             return results;
         } catch (RuntimeException exception) {
@@ -63,6 +74,25 @@ public class PythonCliSearchService implements SearchService {
                     exception.getClass().getSimpleName()
             );
             throw exception;
+        }
+    }
+
+    private void saveHistory(
+            String query,
+            String queryHash,
+            int topK,
+            long durationMs,
+            boolean cacheHit
+    ) {
+        try {
+            searchHistory.save(query, topK, durationMs, cacheHit);
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "event=search_history_save_failed queryHash={} topK={} "
+                            + "durationMs={} cacheHit={} errorType={}",
+                    queryHash, topK, durationMs, cacheHit,
+                    exception.getClass().getSimpleName()
+            );
         }
     }
 

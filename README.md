@@ -268,11 +268,15 @@ docker run --name fashion-search-redis --rm -p 6379:6379 redis:7-alpine
 The backend can also run without Redis; searches then use the Python FAISS
 engine directly.
 
-### MySQL search history infrastructure
+### MySQL search history
 
-Sprint 6 adds the JPA entity and repository for the `search_history` table.
-Search requests are not persisted yet, so the existing `/api/search`, Redis,
-and Python behavior is unchanged.
+After a successful search, the service writes the normalized query, resolved
+`topK`, total duration, and cache-hit status to `search_history`. Cache hits are
+recorded with `cacheHit=true`; cache misses that call the Python/FAISS engine
+are recorded with `cacheHit=false`. Persistence is reached through a
+`SearchHistoryPort`, keeping JPA out of the controller and search-domain
+boundary. A database write failure is logged as `search_history_save_failed`
+and never changes the search response or HTTP status.
 
 Start a local MySQL 8 instance with Docker:
 

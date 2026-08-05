@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import com.feihong.fashionsearch.dto.SearchRequest;
 import com.feihong.fashionsearch.dto.SearchResult;
+import com.feihong.fashionsearch.history.SearchHistoryPort;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
@@ -18,8 +19,9 @@ import static org.mockito.Mockito.when;
 class PythonCliSearchServiceTest {
     private final SearchEnginePort searchEngine = mock(SearchEnginePort.class);
     private final CachePort cache = mock(CachePort.class);
+    private final SearchHistoryPort searchHistory = mock(SearchHistoryPort.class);
     private final PythonCliSearchService service =
-            new PythonCliSearchService(searchEngine, cache);
+            new PythonCliSearchService(searchEngine, cache, searchHistory);
     private final SearchResult result = mock(SearchResult.class);
 
     @Test
