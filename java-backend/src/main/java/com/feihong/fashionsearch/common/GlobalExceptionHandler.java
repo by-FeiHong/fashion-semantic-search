@@ -2,6 +2,7 @@ package com.feihong.fashionsearch.common;
 
 import java.util.stream.Collectors;
 
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,17 @@ public class GlobalExceptionHandler {
     ) {
         String message = exception.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .collect(Collectors.joining("; "));
+        return ResponseEntity.badRequest().body(ApiResponse.error(message));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(
+            ConstraintViolationException exception
+    ) {
+        String message = exception.getConstraintViolations().stream()
+                .map(violation -> "limit: " + violation.getMessage())
+                .distinct()
                 .collect(Collectors.joining("; "));
         return ResponseEntity.badRequest().body(ApiResponse.error(message));
     }

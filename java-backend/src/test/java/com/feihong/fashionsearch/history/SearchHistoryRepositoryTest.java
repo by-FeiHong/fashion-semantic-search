@@ -3,6 +3,7 @@ package com.feihong.fashionsearch.history;
 import java.util.Arrays;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -44,5 +45,41 @@ class SearchHistoryRepositoryTest {
                         "idx_search_history_query",
                         "idx_search_history_created_at"
                 );
+    }
+
+    @Test
+    void aggregatesStatsAndReturnsStableTopQueries() {
+        repository.saveAllAndFlush(Arrays.asList(
+                new SearchHistory("zebra coat", 5, 100L, true),
+                new SearchHistory("amber dress", 5, 200L, false),
+                new SearchHistory("zebra coat", 10, 300L, true),
+                new SearchHistory("amber dress", 3, 400L, false),
+                new SearchHistory("blue jeans", 5, 500L, false)
+        ));
+
+        SearchHistoryRepository.SearchStatsSummary summary = repository.aggregateStats();
+        var topQueries = repository.findTopQueries(PageRequest.of(0, 2));
+
+        assertThat(summary.getTotalSearches()).isEqualTo(5);
+        assertThat(summary.getCacheHits()).isEqualTo(2);
+        assertThat(summary.getAverageDurationMs()).isEqualTo(300.0);
+        assertThat(topQueries).extracting(
+                        SearchHistoryRepository.TopQueryCount::getQuery,
+                        SearchHistoryRepository.TopQueryCount::getCount
+                )
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("amber dress", 2L),
+                        org.assertj.core.groups.Tuple.tuple("zebra coat", 2L)
+                );
+    }
+
+    @Test
+    void aggregatesEmptyHistoryAsZeros() {
+        SearchHistoryRepository.SearchStatsSummary summary = repository.aggregateStats();
+
+        assertThat(summary.getTotalSearches()).isZero();
+        assertThat(summary.getCacheHits()).isZero();
+        assertThat(summary.getAverageDurationMs()).isZero();
+        assertThat(repository.findTopQueries(PageRequest.of(0, 10))).isEmpty();
     }
 }

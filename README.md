@@ -226,7 +226,48 @@ curl.exe -X POST http://localhost:8080/api/search `
   -d '{\"query\":\"minimal black dress\",\"topK\":5}'
 ```
 
-Both endpoints return a consistent response envelope containing `success`,
+Search statistics (the default returns the top 10 queries):
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/stats
+Invoke-RestMethod "http://localhost:8080/api/stats?limit=5"
+```
+
+Equivalent `curl` examples:
+
+```powershell
+curl.exe http://localhost:8080/api/stats
+curl.exe "http://localhost:8080/api/stats?limit=5"
+```
+
+The optional `limit` query parameter accepts values from 1 through 50. A
+successful response uses the standard envelope and contains aggregate search
+history data:
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalSearches": 120,
+    "cacheHitRate": 0.75,
+    "averageDurationMs": 214.5,
+    "topQueries": [
+      {
+        "query": "minimal black dress",
+        "count": 24
+      }
+    ]
+  },
+  "message": "OK",
+  "timestamp": "2026-08-06T00:00:00Z"
+}
+```
+
+When no searches have been recorded, counts, cache-hit rate, and average
+duration are zero and `topQueries` is empty. Top queries are ordered by count
+descending, then query ascending for deterministic results.
+
+All endpoints return a consistent response envelope containing `success`,
 `data`, `message`, and `timestamp`. Validation and adapter failures are
 converted into structured HTTP error responses.
 
