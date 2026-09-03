@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration
 @EnableConfigurationProperties({
-        PythonSearchProperties.class,
+        AiServiceProperties.class,
         SearchCacheProperties.class
 })
 public class SearchConfig {

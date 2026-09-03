@@ -11,6 +11,10 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.feihong.fashionsearch.exception.AiServiceInvalidResponseException;
+import com.feihong.fashionsearch.exception.AiServiceTimeoutException;
+import com.feihong.fashionsearch.exception.AiServiceUnavailableException;
+import com.feihong.fashionsearch.exception.AiServiceUpstreamException;
 import com.feihong.fashionsearch.exception.PythonJsonParseException;
 import com.feihong.fashionsearch.exception.PythonNonZeroExitException;
 import com.feihong.fashionsearch.exception.PythonProcessStartException;
@@ -44,20 +48,28 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.error(message));
     }
 
-    @ExceptionHandler(PythonSearchTimeoutException.class)
+    @ExceptionHandler({PythonSearchTimeoutException.class, AiServiceTimeoutException.class})
     public ResponseEntity<ApiResponse<Void>> handleTimeout(
-            PythonSearchTimeoutException exception) {
+            SearchServiceException exception) {
         return response(HttpStatus.GATEWAY_TIMEOUT, exception);
     }
 
     @ExceptionHandler({
             PythonProcessStartException.class,
             PythonNonZeroExitException.class,
-            PythonJsonParseException.class
+            PythonJsonParseException.class,
+            AiServiceInvalidResponseException.class,
+            AiServiceUpstreamException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleBadGateway(
             SearchServiceException exception) {
         return response(HttpStatus.BAD_GATEWAY, exception);
+    }
+
+    @ExceptionHandler(AiServiceUnavailableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnavailable(
+            AiServiceUnavailableException exception) {
+        return response(HttpStatus.SERVICE_UNAVAILABLE, exception);
     }
 
     @ExceptionHandler(PythonSearchInterruptedException.class)

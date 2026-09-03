@@ -148,23 +148,46 @@ python scripts/evaluate_search.py `
 ## Java backend
 
 The `java-backend/` module is a Spring Boot 3 application using Maven and
-Java 17. It keeps the web API and service layers in Java while reusing the
-existing Python embedding and FAISS search through a small CLI adapter.
+Java 17. Semantic search runs in a persistent FastAPI service, so the model,
+FAISS index, and metadata are loaded once at service startup instead of once
+per request. `scripts/search.py` remains available for offline debugging and
+regression checks.
 
 ```text
 Client
   -> Spring Boot controller
   -> Search service
   -> SearchEnginePort
-  -> Python CLI adapter
-  -> Sentence Transformer + FAISS
+  -> HTTP adapter
+  -> persistent FastAPI service
+  -> Sentence Transformer + FAISS (loaded once)
   -> DeepFashion metadata and images
 ```
 
 The Java backend follows a ports-and-adapters boundary: business logic depends
-on `SearchEnginePort`, while `PythonSearchAdapter` owns process execution and
-JSON translation. This keeps the service independent of the current Python
-implementation and makes it straightforward to test or replace.
+on `SearchEnginePort`, while `HttpSearchEngineAdapter` owns HTTP and JSON
+translation. The service layer does not depend on FastAPI or HTTP details.
+
+### Complete local startup order
+
+From the project root, install dependencies and start the AI service first:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m uvicorn ai_service.app:app --host 127.0.0.1 --port 8000
+```
+
+The FastAPI process must be started from the project root so its default paths
+resolve to `data/processed/fashion.index`, `metadata_index.csv`, and
+`metadata.csv`. Verify that the initialized service is ready:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
+
+In separate terminals, start Redis and MySQL as documented below, then start
+the Java API:
 
 Run the backend after installing Java 17 and Maven:
 
@@ -173,34 +196,36 @@ cd java-backend
 mvn spring-boot:run
 ```
 
-The adapter is configured in
+The HTTP adapter is configured in
 `java-backend/src/main/resources/application.yml`:
 
 ```yaml
 fashion-search:
-  python:
-    executable: ${PYTHON_EXECUTABLE:../.venv/Scripts/python.exe}
-    project-root: ${FASHION_SEARCH_PROJECT_ROOT:..}
-    search-script: ${FASHION_SEARCH_SCRIPT:scripts/search.py}
-    timeout: ${FASHION_SEARCH_TIMEOUT:30s}
+  ai-service:
+    base-url: ${FASHION_SEARCH_AI_BASE_URL:http://localhost:8000}
+    connect-timeout: ${FASHION_SEARCH_AI_CONNECT_TIMEOUT:2s}
+    read-timeout: ${FASHION_SEARCH_AI_READ_TIMEOUT:10s}
 ```
 
 Environment variables can override every deployment-specific value:
 
 ```powershell
-$env:FASHION_SEARCH_PROJECT_ROOT = "D:\Projects\fashion-semantic-search"
-$env:PYTHON_EXECUTABLE = "D:\Projects\fashion-semantic-search\.venv\Scripts\python.exe"
-$env:FASHION_SEARCH_SCRIPT = "scripts/search.py"
-$env:FASHION_SEARCH_TIMEOUT = "30s"
+$env:FASHION_SEARCH_AI_BASE_URL = "http://localhost:8000"
+$env:FASHION_SEARCH_AI_CONNECT_TIMEOUT = "2s"
+$env:FASHION_SEARCH_AI_READ_TIMEOUT = "10s"
 mvn spring-boot:run
 ```
+
+The Python service also supports `FASHION_SEARCH_INDEX_PATH`,
+`FASHION_SEARCH_METADATA_PATH`, `FASHION_SEARCH_DETAILS_PATH`,
+`FASHION_SEARCH_MODEL_NAME`, and `FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD`.
 
 Structured logs cover controller, service, and adapter boundaries with the
 query, `topK`, elapsed time, outcome, and safe error category. Python stderr and
 exception stack traces are deliberately excluded from request-failure logs.
 Adapter failures use the same response envelope as validation failures:
-timeouts return HTTP 504, process startup/non-zero exit/invalid JSON return
-HTTP 502, and interrupted requests return HTTP 503.
+timeouts return HTTP 504, upstream 5xx and invalid JSON return HTTP 502, and
+connection failures return HTTP 503.
 
 Health check:
 
@@ -276,7 +301,7 @@ converted into structured HTTP error responses.
 The Spring Boot service uses a Cache-Aside flow through a technology-neutral
 `CachePort`. Search keys use the prefix `fashion-search:search:v1`, a SHA-256
 digest of the normalized query, and `topK`. Query text is not stored in keys or
-logs. A cache hit skips the Python/FAISS process; a miss calls the search engine
+logs. A cache hit skips the AI service; a miss calls the search engine
 and stores the result for 10 minutes by default.
 
 Redis is an optional performance dependency. Read or write failures are logged
@@ -306,14 +331,14 @@ Start only Redis with Docker:
 docker run --name fashion-search-redis --rm -p 6379:6379 redis:7-alpine
 ```
 
-The backend can also run without Redis; searches then use the Python FAISS
-engine directly.
+The backend can also run without Redis; searches then use the FastAPI search
+service directly.
 
 ### MySQL search history
 
 After a successful search, the service writes the normalized query, resolved
 `topK`, total duration, and cache-hit status to `search_history`. Cache hits are
-recorded with `cacheHit=true`; cache misses that call the Python/FAISS engine
+recorded with `cacheHit=true`; cache misses that call the FastAPI search service
 are recorded with `cacheHit=false`. Persistence is reached through a
 `SearchHistoryPort`, keeping JPA out of the controller and search-domain
 boundary. A database write failure is logged as `search_history_save_failed`
@@ -348,10 +373,14 @@ Hibernate creates or updates `search_history` at application startup and keeps
 indexes on the search query and creation time. For production deployments, set
 a strong password and manage schema changes with a migration tool.
 
-Java tests use an in-memory H2 database in MySQL compatibility mode and do not
-require MySQL, Redis, or the Python search process:
+Java tests use an in-memory H2 database and MockWebServer; they do not require
+MySQL, Redis, or a running Python service. Run the complete verification suite:
 
 ```powershell
 cd java-backend
 mvn test
+cd ..
+python -m pytest
+python -m compileall ai_service scripts tests
+git diff --check
 ```

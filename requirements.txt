@@ -1,6 +1,10 @@
 faiss-cpu
+fastapi
+httpx
 numpy
 pillow
+pytest
 sentence-transformers
 streamlit
 torch
+uvicorn[standard]
