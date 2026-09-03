@@ -167,6 +167,29 @@ class PriceFilterInput(BaseModel):
 class BuildOutfitInput(BaseModel):
     candidates: list[dict[str, Any]]
     categories: list[str] = Field(min_length=1)
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    query: str | None = None
+    demo_mode: bool = False
+
+
+class OutfitItem(BaseModel):
+    requested_category: str
+    matched_category: str
+    item: dict[str, Any]
+    score: float
+    score_components: dict[str, float]
+    unsupported_constraints: list[str] = Field(default_factory=list)
+
+
+class RecommendationResult(BaseModel):
+    selected_items: list[OutfitItem]
+    missing_categories: list[str]
+    substitutions: dict[str, str] = Field(default_factory=dict)
+    constraint_summary: dict[str, Any]
+    score_summary: dict[str, Any]
+    recommendation_reason: str = ""
+    complete: bool
+    result_count: int
 
 
 @tool(description="Search the persistent semantic fashion index.")
@@ -227,24 +250,108 @@ def filter_by_price(args: PriceFilterInput, context: ToolContext) -> dict[str, A
     }
 
 
-@tool(description="Build a deterministic outfit with the first matching item per requested category.")
+_CATEGORY_ALIASES = {
+    "top": ("top", "shirt", "blouse", "tee", "sweater"), "bottom": ("bottom", "pants", "trousers", "jeans", "skirt", "shorts"),
+    "shoes": ("shoe", "shoes", "sneaker", "boot", "loafer", "sandal"), "outerwear": ("outerwear", "coat", "jacket", "blazer"),
+    "dress": ("dress",), "bag": ("bag", "handbag", "backpack"),
+}
+_SUBSTITUTES = {"top": ("dress",), "bottom": ("dress",), "outerwear": ("top",), "shoes": (), "bag": ()}
+
+
+def _field_text(record: dict[str, Any], names: tuple[str, ...]) -> str:
+    return " ".join(str(record.get(name, "")) for name in names).casefold()
+
+
+def _canonical_category(record: dict[str, Any]) -> str:
+    value = _category(record)
+    return next((canonical for canonical, aliases in _CATEGORY_ALIASES.items() if any(alias in value for alias in aliases)), value)
+
+
+def _semantic_score(record: dict[str, Any]) -> float:
+    try:
+        return max(0.0, min(1.0, float(record.get("score", record.get("semantic_score", 0.0)))))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@tool(description="Build a deterministic, constraint-aware and scored outfit by requested category.")
 def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]:
     del context
-    selected: list[dict[str, Any]] = []
+    selected: list[OutfitItem] = []
     missing: list[str] = []
+    substitutions: dict[str, str] = {}
     used: set[str] = set()
+    constraints = {key: value for key, value in args.constraints.items() if value not in (None, [], "") and key != "source"}
+    candidates = list(args.candidates)
+    budget = float(constraints["budget"]) if "budget" in constraints else None
+    real_prices_available = bool(candidates) and all(record.get("price") not in (None, "") for record in candidates)
+    budget_supported = budget is not None and (args.demo_mode or real_prices_available)
+    if budget_supported and args.demo_mode:
+        candidates = [{**record, "price": record.get("price") or _demo_price(record),
+                       "price_source": "real" if record.get("price") not in (None, "") else "synthetic_demo"} for record in candidates]
+    remaining_budget = budget
+    supported: set[str] = set()
+    unsupported: set[str] = set()
+
+    def rank(record: dict[str, Any], requested: str, matched: str) -> tuple[float, dict[str, float], list[str]]:
+        components = {"semantic": round(_semantic_score(record) * 0.45, 4), "category": 0.25 if requested == matched else 0.12}
+        item_unsupported: list[str] = []
+        fields = {"colors": ("color", "colors", "description", "name"), "style": ("style", "description", "name"),
+                  "season": ("season", "description", "name"), "occasion": ("occasion", "description", "name")}
+        for key, names in fields.items():
+            wanted = constraints.get(key)
+            if not wanted:
+                continue
+            explicit = _field_text(record, names)
+            values = wanted if isinstance(wanted, list) else [wanted]
+            if not explicit.strip():
+                item_unsupported.append(key)
+                unsupported.add(key)
+                components[key] = 0.0
+            else:
+                supported.add(key)
+                components[key] = round(0.075 * sum(str(v).casefold() in explicit for v in values) / len(values), 4)
+        return round(sum(components.values()), 4), components, item_unsupported
+
     for requested in args.categories:
         wanted = requested.strip().casefold()
-        match = next(
-            (record for record in args.candidates if wanted in _category(record) and str(record.get("item_id", id(record))) not in used),
-            None,
-        )
-        if match is None:
+        pool = [(record, _canonical_category(record)) for record in candidates if str(record.get("item_id", record.get("image_path", id(record)))) not in used]
+        if budget_supported and remaining_budget is not None:
+            pool = [(record, category) for record, category in pool if float(record["price"]) <= remaining_budget]
+        matches = [(record, category) for record, category in pool if category == wanted]
+        if not matches:
+            matches = [(record, category) for record, category in pool if category in _SUBSTITUTES.get(wanted, ())]
+        if not matches:
             missing.append(requested)
         else:
-            selected.append(match)
-            used.add(str(match.get("item_id", id(match))))
-    return {"items": selected, "missing_categories": missing, "complete": not missing, "result_count": len(selected)}
+            ranked = [(rank(record, wanted, category), record, category) for record, category in matches]
+            (score, components, item_unsupported), match, matched_category = sorted(ranked, key=lambda row: (-row[0][0], str(row[1].get("item_id", row[1].get("image_path", "")))))[0]
+            if matched_category != wanted:
+                substitutions[requested] = matched_category
+            selected.append(OutfitItem(requested_category=requested, matched_category=matched_category, item=match,
+                                       score=score, score_components=components, unsupported_constraints=item_unsupported))
+            used.add(str(match.get("item_id", match.get("image_path", id(match)))))
+            if budget_supported and remaining_budget is not None:
+                remaining_budget -= float(match["price"])
+    if "budget" in constraints:
+        if budget_supported:
+            supported.add("budget")
+        else:
+            unsupported.add("budget")
+    scores = [item.score for item in selected]
+    result = RecommendationResult(selected_items=selected, missing_categories=missing, substitutions=substitutions,
+        constraint_summary={"requested": constraints, "supported": sorted(supported), "unsupported": sorted(unsupported)},
+        score_summary={"overall": round(sum(scores) / len(scores), 4) if scores else 0.0, "item_scores": scores,
+                       "total_price": round((budget - remaining_budget), 2) if budget_supported and budget is not None and remaining_budget is not None else None,
+                       "method": "deterministic_weighted_v1"}, complete=not missing, result_count=len(selected))
+    data = _validate_dump(result)
+    data["items"] = [item["item"] for item in data["selected_items"]]
+    return data
+
+
+def _validate_dump(model: BaseModel) -> dict[str, Any]:
+    dumper = getattr(model, "model_dump", None)
+    return dumper() if dumper else model.dict()
 
 
 def create_tool_registry() -> ToolRegistry:

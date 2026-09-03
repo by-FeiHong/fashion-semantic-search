@@ -53,6 +53,7 @@ class SearchRequest(BaseModel):
 class AgentRequest(BaseModel):
     query: str = Field(min_length=1)
     max_steps: int | None = Field(default=None, ge=1, le=20)
+    demo_mode: bool = False
 
 
 def _path_from_env(name: str, default: Path) -> Path:
@@ -149,6 +150,7 @@ def create_app(
             agent_request.query,
             ToolContext(runtime),
             agent_request.max_steps,
+            agent_request.demo_mode,
         )
 
     return app

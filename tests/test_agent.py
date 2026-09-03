@@ -91,3 +91,34 @@ def test_single_tool_failure_returns_partial_results_and_continues() -> None:
     assert result["trace"][1]["status"].startswith("failed:")
     assert result["recommendation"]["items"][0]["item_id"] == "t"
     assert result["partial_results"]
+
+
+def test_deterministic_constraint_extraction_for_bilingual_demo_cases() -> None:
+    chinese = Planner.deterministic_plan("黑灰色秋季通勤极简穿搭，预算 1500")
+    assert chinese.constraints.season == "autumn"
+    assert chinese.constraints.occasion == "commute"
+    assert chinese.constraints.colors == ["black", "gray"]
+    assert chinese.constraints.style == "minimal"
+    assert chinese.constraints.budget == 1500
+    english = Planner.deterministic_plan("casual summer outfit")
+    assert english.constraints.season == "summer"
+    assert english.constraints.occasion == "casual"
+
+
+class ExplanationProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        del system_prompt, user_prompt
+        self.calls += 1
+        if self.calls == 1:
+            return valid_plan()
+        return {"recommendation_reason": "A concise provider-generated explanation."}
+
+
+def test_llm_explanation_and_deterministic_explanation_fallback() -> None:
+    llm_result = AgentRuntime(create_tool_registry(), Planner(ExplanationProvider())).recommend("request", CONTEXT)
+    assert llm_result["recommendation"]["recommendation_reason"].startswith("A concise")
+    fallback = AgentRuntime(create_tool_registry(), Planner(StubProvider(LLMProviderError("offline")))).recommend("request", CONTEXT)
+    assert fallback["recommendation"]["recommendation_reason"].startswith("Selected 3 item")

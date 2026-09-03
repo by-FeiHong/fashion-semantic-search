@@ -461,3 +461,41 @@ If the LLM is unavailable or returns an invalid plan, the service marks the resp
 tool is recorded in the trace; later recoverable calls continue with the last good context,
 and partial results are returned when available. Price filtering still uses real prices only
 unless explicit `demo_mode=true` is supplied.
+
+## Constraint-aware outfit recommendations
+
+`POST /agent/recommend` now always normalizes successful search candidates into a
+structured outfit recommendation. The typed plan accepts optional `season`, `occasion`,
+`colors`, `style`, `budget`, and `categories` constraints while remaining compatible with
+plans that omit them. The LLM is asked for these fields first; the deterministic fallback
+recognizes simple English and Chinese season, occasion, color, style, category, and budget
+terms.
+
+`build_outfit` groups candidates by canonical category, applies documented substitutions
+(for example, a dress may cover a missing top or bottom), and ranks deterministically using
+semantic relevance, category fit, and only the color/style/season/occasion metadata that is
+actually present. Its response includes `selected_items`, `missing_categories`,
+`substitutions`, `constraint_summary`, `score_summary`, and `recommendation_reason`; the
+legacy `items` field remains available. A provider-neutral LLM may generate the short reason,
+with a deterministic factual explanation as fallback. Hidden reasoning is never returned.
+
+Example response (abbreviated):
+
+```json
+{
+  "recommendation": {
+    "selected_items": [{"requested_category":"top","matched_category":"top","item":{"item_id":"42"},"score":0.71}],
+    "missing_categories": ["shoes"],
+    "constraint_summary": {"requested":{"season":"autumn","colors":["black","gray"]},"supported":["colors"],"unsupported":["season"]},
+    "score_summary": {"overall":0.71,"method":"deterministic_weighted_v1"},
+    "recommendation_reason": "Selected 1 item using deterministic category and available attribute matching; no suitable candidate was available for shoes."
+  },
+  "trace": [], "degraded": false
+}
+```
+
+DeepFashion metadata does not consistently contain real prices, colors, styles, seasons, or
+occasions. Missing attributes are reported as `unsupported` and never invented. Budget is a
+hard cumulative constraint only when real prices are available for the candidate set, or
+when the request explicitly sends `"demo_mode": true`; synthetic demo prices are clearly
+marked `price_source=synthetic_demo`.

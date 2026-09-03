@@ -113,3 +113,32 @@ def test_build_outfit_is_deterministic_and_reports_missing_categories() -> None:
     assert [item["item_id"] for item in result["items"]] == ["top-1", "shoe-1"]
     assert result["missing_categories"] == ["bag"]
     assert result["complete"] is False
+
+
+def test_constraint_scoring_stable_order_substitution_and_unsupported_fields() -> None:
+    candidates = [
+        {"item_id": "z", "category": "top", "score": 0.9, "color": "red", "style": "sporty"},
+        {"item_id": "a", "category": "top", "score": 0.9, "color": "black", "style": "minimal"},
+        {"item_id": "d", "category": "dress", "score": 0.8, "color": "black"},
+    ]
+    arguments = {"candidates": candidates, "categories": ["top", "bottom", "shoes"],
+                 "constraints": {"colors": ["black"], "style": "minimal", "season": "autumn"}}
+    first = create_tool_registry().invoke("build_outfit", arguments, CONTEXT)["data"]
+    second = create_tool_registry().invoke("build_outfit", arguments, CONTEXT)["data"]
+    assert first == second
+    assert first["selected_items"][0]["item"]["item_id"] == "a"
+    assert first["substitutions"]["bottom"] == "dress"
+    assert first["missing_categories"] == ["shoes"]
+    assert "season" in first["constraint_summary"]["unsupported"]
+
+
+def test_budget_unsupported_by_default_and_hard_constraint_in_demo_mode() -> None:
+    candidates = [{"item_id": "top-1", "category": "top", "score": 1.0},
+                  {"item_id": "shoe-1", "category": "shoes", "score": 1.0}]
+    base = {"candidates": candidates, "categories": ["top", "shoes"], "constraints": {"budget": 1}}
+    unsupported = create_tool_registry().invoke("build_outfit", base, CONTEXT)["data"]
+    assert "budget" in unsupported["constraint_summary"]["unsupported"]
+    assert all("price" not in item["item"] for item in unsupported["selected_items"])
+    demo = create_tool_registry().invoke("build_outfit", {**base, "demo_mode": True}, CONTEXT)["data"]
+    assert "budget" in demo["constraint_summary"]["supported"]
+    assert demo["selected_items"] == []

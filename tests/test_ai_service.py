@@ -76,4 +76,5 @@ def test_agent_recommend_success_response() -> None:
         assert body["success"] is True
         assert body["degraded"] is False
         assert body["trace"][0]["tool"] == "semantic_search"
+        assert set(body["recommendation"]) >= {"selected_items", "missing_categories", "constraint_summary", "score_summary", "recommendation_reason"}
         assert "reasoning" not in body
