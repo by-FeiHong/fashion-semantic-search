@@ -3,6 +3,15 @@
 from fastapi.testclient import TestClient
 
 from ai_service.app import create_app
+from ai_service.llm import LLMProvider
+
+
+class StubProvider(LLMProvider):
+    def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, object]:
+        del system_prompt
+        return {"intent": "recommend", "constraints": {}, "tool_calls": [
+            {"tool": "semantic_search", "arguments": {"query": user_prompt, "top_k": 2}}
+        ]}
 
 
 class FakeRuntime:
@@ -57,3 +66,14 @@ def test_tools_endpoints_list_invoke_and_return_structured_errors() -> None:
         invalid = client.post("/tools/semantic_search/invoke", json={"query": ""})
         assert invalid.status_code == 422
         assert invalid.json()["error"]["type"] == "validation_error"
+
+
+def test_agent_recommend_success_response() -> None:
+    with TestClient(create_app(FakeRuntime, llm_provider=StubProvider())) as client:
+        response = client.post("/agent/recommend", json={"query": "minimal black outfit", "max_steps": 4})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["degraded"] is False
+        assert body["trace"][0]["tool"] == "semantic_search"
+        assert "reasoning" not in body

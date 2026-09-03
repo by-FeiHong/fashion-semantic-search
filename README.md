@@ -426,3 +426,38 @@ python -m pytest
 python -m compileall ai_service scripts tests
 git diff --check
 ```
+# Single-Agent Planner and Tool Calling
+
+The Python AI service includes a provider-neutral `LLMProvider`, a Pydantic-validated
+`Planner`, and a bounded `AgentRuntime`. The runtime executes a plan through the existing
+`ToolRegistry`, accumulates tool outputs, skips duplicate calls, and stops at six steps by
+default. It returns a compact plan summary and tool timing/status trace, never hidden
+reasoning or chain-of-thought.
+
+Configuration is injected exclusively through environment variables:
+
+```text
+FASHION_LLM_PROVIDER=disabled|openai_compatible
+FASHION_LLM_MODEL=<model name>
+FASHION_LLM_BASE_URL=<provider API base URL>
+FASHION_LLM_API_KEY=<secret>
+FASHION_LLM_TIMEOUT_SECONDS=20
+```
+
+`disabled` is the safe default. The `openai_compatible` implementation calls a configurable
+JSON chat-completions endpoint; tests inject an in-memory stub and never use the network.
+
+Request example:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/agent/recommend `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"black and grey minimalist autumn commute outfit","max_steps":6}'
+```
+
+If the LLM is unavailable or returns an invalid plan, the service marks the response as
+`degraded` and uses a deterministic `semantic_search` plus `build_outfit` plan. A failed
+tool is recorded in the trace; later recoverable calls continue with the last good context,
+and partial results are returned when available. Price filtering still uses real prices only
+unless explicit `demo_mode=true` is supplied.

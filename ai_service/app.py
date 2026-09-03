@@ -31,6 +31,8 @@ from ai_service.tools import (
     UnknownToolError,
     create_tool_registry,
 )
+from ai_service.agent import AgentRuntime, Planner
+from ai_service.llm import LLMProvider, create_llm_provider
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,11 @@ class SearchRuntime:
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     topK: int = Field(gt=0, le=100)
+
+
+class AgentRequest(BaseModel):
+    query: str = Field(min_length=1)
+    max_steps: int | None = Field(default=None, ge=1, le=20)
 
 
 def _path_from_env(name: str, default: Path) -> Path:
@@ -79,8 +86,10 @@ def load_runtime() -> SearchRuntime:
 def create_app(
     runtime_loader: Callable[[], SearchRuntime] = load_runtime,
     registry: ToolRegistry | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> FastAPI:
     tool_registry = registry or create_tool_registry()
+    agent_runtime = AgentRuntime(tool_registry, Planner(llm_provider or create_llm_provider()))
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
         app.state.search_runtime = runtime_loader()
@@ -130,6 +139,17 @@ def create_app(
             return JSONResponse(status_code=422, content=_tool_error(name, exc))
         except ToolError as exc:
             return JSONResponse(status_code=500, content=_tool_error(name, exc))
+
+    @app.post("/agent/recommend")
+    def recommend(
+        agent_request: AgentRequest,
+        runtime: SearchRuntime = Depends(get_runtime),
+    ) -> dict[str, object]:
+        return agent_runtime.recommend(
+            agent_request.query,
+            ToolContext(runtime),
+            agent_request.max_steps,
+        )
 
     return app
 
