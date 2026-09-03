@@ -10,6 +10,7 @@ from typing import Callable, Iterator
 
 import faiss
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
@@ -21,6 +22,14 @@ from scripts.search import (
     enrich_metadata,
     load_metadata,
     search_text,
+)
+from ai_service.tools import (
+    ToolContext,
+    ToolError,
+    ToolRegistry,
+    ToolValidationError,
+    UnknownToolError,
+    create_tool_registry,
 )
 
 
@@ -67,7 +76,11 @@ def load_runtime() -> SearchRuntime:
     return SearchRuntime(index=index, metadata=metadata, model=model)
 
 
-def create_app(runtime_loader: Callable[[], SearchRuntime] = load_runtime) -> FastAPI:
+def create_app(
+    runtime_loader: Callable[[], SearchRuntime] = load_runtime,
+    registry: ToolRegistry | None = None,
+) -> FastAPI:
+    tool_registry = registry or create_tool_registry()
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
         app.state.search_runtime = runtime_loader()
@@ -89,7 +102,48 @@ def create_app(runtime_loader: Callable[[], SearchRuntime] = load_runtime) -> Fa
     ) -> list[dict[str, str | float]]:
         return runtime.search(search_request.query, search_request.topK)
 
+    @app.get("/tools")
+    def list_tools() -> dict[str, object]:
+        return {
+            "success": True,
+            "tools": [
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "input_schema": spec.input_schema,
+                }
+                for spec in tool_registry.list_specs()
+            ],
+        }
+
+    @app.post("/tools/{name}/invoke", response_model=None)
+    def invoke_tool(
+        name: str,
+        arguments: dict[str, object],
+        runtime: SearchRuntime = Depends(get_runtime),
+    ) -> JSONResponse | dict[str, object]:
+        try:
+            return tool_registry.invoke(name, arguments, ToolContext(runtime))
+        except UnknownToolError as exc:
+            return JSONResponse(status_code=404, content=_tool_error(name, exc))
+        except ToolValidationError as exc:
+            return JSONResponse(status_code=422, content=_tool_error(name, exc))
+        except ToolError as exc:
+            return JSONResponse(status_code=500, content=_tool_error(name, exc))
+
     return app
+
+
+def _tool_error(name: str, error: ToolError) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "success": False,
+        "tool": name,
+        "data": None,
+        "error": {"type": error.error_type, "message": str(error)},
+    }
+    if isinstance(error, ToolValidationError) and error.details:
+        payload["error"]["details"] = error.details
+    return payload
 
 
 app = create_app()

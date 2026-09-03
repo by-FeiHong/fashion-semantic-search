@@ -36,3 +36,24 @@ def test_health_and_search_share_one_runtime_initialization() -> None:
 def test_search_validates_request() -> None:
     with TestClient(create_app(FakeRuntime)) as client:
         assert client.post("/search", json={"query": "", "topK": 0}).status_code == 422
+
+
+def test_tools_endpoints_list_invoke_and_return_structured_errors() -> None:
+    with TestClient(create_app(FakeRuntime)) as client:
+        listing = client.get("/tools")
+        assert listing.status_code == 200
+        assert {item["name"] for item in listing.json()["tools"]} == {
+            "semantic_search", "filter_by_category", "filter_by_price", "build_outfit"
+        }
+        success = client.post(
+            "/tools/semantic_search/invoke",
+            json={"query": "black dress", "top_k": 2},
+        )
+        assert success.status_code == 200
+        assert success.json()["success"] is True
+        unknown = client.post("/tools/missing/invoke", json={})
+        assert unknown.status_code == 404
+        assert unknown.json()["error"]["type"] == "unknown_tool"
+        invalid = client.post("/tools/semantic_search/invoke", json={"query": ""})
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["type"] == "validation_error"

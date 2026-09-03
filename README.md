@@ -220,6 +220,48 @@ The Python service also supports `FASHION_SEARCH_INDEX_PATH`,
 `FASHION_SEARCH_METADATA_PATH`, `FASHION_SEARCH_DETAILS_PATH`,
 `FASHION_SEARCH_MODEL_NAME`, and `FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD`.
 
+### Lightweight Tool Framework
+
+The AI service now exposes a small framework for later Agent/LLM orchestration,
+without LangChain, LangGraph, CrewAI, or an Agents SDK. A `@tool` decorator builds
+JSON-compatible input schemas from Pydantic models, while `ToolRegistry` provides
+registration, lookup, schema listing, validation, and a single invocation boundary.
+All tools share the already-loaded semantic-search runtime.
+
+```text
+FastAPI -> ToolRegistry -> semantic_search / filters / build_outfit
+                         -> persistent SearchRuntime -> FAISS + model
+```
+
+Available tools:
+
+- `semantic_search`: reuses the persistent semantic index.
+- `filter_by_category`: filters an explicit candidate list.
+- `filter_by_price`: uses real `price` fields by default. If none exist, it returns
+  `unsupported`; deterministic synthetic values are used only with `demo_mode=true`
+  and are marked `price_source=synthetic_demo`.
+- `build_outfit`: deterministically picks the first matching unused candidate for
+  each requested category and reports missing categories.
+
+List tool definitions and generated input schemas:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/tools
+```
+
+Invoke semantic search through the tool boundary:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/tools/semantic_search/invoke `
+  -Method Post -ContentType "application/json" `
+  -Body '{"query":"minimal black dress","top_k":5}'
+```
+
+Responses use `{success, tool, data, error}`. Unknown tools return HTTP 404,
+argument validation errors return 422, and unexpected execution failures return
+500. Structured logs include only the tool name, elapsed time, result count, or
+error type; full query text is not logged.
+
 Structured logs cover controller, service, and adapter boundaries with the
 query, `topK`, elapsed time, outcome, and safe error category. Python stderr and
 exception stack traces are deliberately excluded from request-failure logs.
