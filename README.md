@@ -591,3 +591,43 @@ potentially sensitive, choose a provider with suitable retention terms, avoid em
 personal addresses in queries, and use TLS. Forecast accuracy, units, location resolution,
 and supported forecast range depend on the configured provider; the generic adapter assumes
 temperature in °C, precipitation in mm, and wind in m/s after any vendor-side normalization.
+
+### Structured user preference memory
+
+The optional memory path is explicit and provider-neutral:
+
+```text
+Preferences API -> UserPreferenceStore -> InMemoryUserPreferenceStore
+                                         (future MySQL/Redis adapter)
+Agent request + optional user_id -> read preferences -> deterministic merge -> search/build_outfit
+```
+
+Preferences are never learned implicitly from conversation. Clients write them deliberately:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/memory/preferences/user-123 -Method Put `
+  -ContentType "application/json" `
+  -Body '{"preferred_colors":["black","gray"],"disliked_colors":["white"],"preferred_styles":["minimal"],"preferred_categories":["top","bottom","shoes"],"budget_min":40,"budget_max":300,"notes":"workwear"}'
+
+Invoke-RestMethod http://localhost:8000/memory/preferences/user-123
+
+Invoke-RestMethod http://localhost:8000/memory/preferences/user-123 -Method Patch `
+  -ContentType "application/json" -Body '{"budget_max":250}'
+
+Invoke-RestMethod http://localhost:8000/agent/recommend -Method Post `
+  -ContentType "application/json" -Body '{"query":"white office outfit under 200","user_id":"user-123"}'
+```
+
+The merge priority is current query, then stored preferences, then defaults. Explicit query
+colors/styles/categories and budget replace the corresponding memory values. A query value
+that conflicts with a disliked value is retained and recorded as `overridden_by_query` in
+`applied_preferences`. Otherwise preferred values fill missing constraints, disliked colors
+and styles receive a deterministic ranking penalty, and stored budget bounds constrain items
+when real (or explicitly enabled demo) prices exist. Responses expose only
+`memory_summary` and `applied_preferences`, never hidden reasoning.
+
+The default store is process-local and is lost on restart. `UserPreferenceStore` is the
+persistence boundary for future MySQL/Redis adapters. Preference data can be personal data:
+use opaque user IDs, authenticate and authorize these endpoints before production use,
+encrypt persistent stores and transport, apply retention/deletion policies, and avoid storing
+sensitive free text in `notes`.

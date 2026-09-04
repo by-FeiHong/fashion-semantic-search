@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ai_service.llm import LLMProvider, LLMProviderError
 from ai_service.tools import ToolContext, ToolError, ToolRegistry
+from ai_service.memory import UserPreferences, model_dump
 
 
 class ToolCall(BaseModel):
@@ -24,6 +25,9 @@ class RecommendationConstraints(BaseModel):
     colors: list[str] | None = None
     style: str | None = None
     budget: float | None = Field(default=None, ge=0)
+    budget_min: float | None = Field(default=None, ge=0)
+    disliked_colors: list[str] | None = None
+    disliked_styles: list[str] | None = None
     categories: list[str] | None = None
     source: str | None = None
     location: str | None = None
@@ -122,9 +126,11 @@ class AgentRuntime:
         self.planner = planner
         self.default_max_steps = default_max_steps
 
-    def recommend(self, query: str, context: ToolContext, max_steps: int | None = None, demo_mode: bool = False) -> dict[str, Any]:
+    def recommend(self, query: str, context: ToolContext, max_steps: int | None = None, demo_mode: bool = False,
+                  preferences: UserPreferences | None = None) -> dict[str, Any]:
         limit = max_steps if max_steps is not None else self.default_max_steps
         plan, degraded, fallback_reason = self.planner.plan(query)
+        memory_summary, applied_preferences = self._merge_preferences(query, plan.constraints, preferences)
         constraints = _dump(plan.constraints)
         trace: list[dict[str, Any]] = []
         outputs: list[dict[str, Any]] = []
@@ -196,7 +202,7 @@ class AgentRuntime:
                 degraded = True
         if isinstance(final, dict):
             final["weather_context"] = weather_context
-            final["recommendation_reason"] = self._explain(query, constraints, final, weather_context)
+            final["recommendation_reason"] = self._explain(query, constraints, final, weather_context, applied_preferences)
         return {
             "success": bool(outputs),
             "recommendation": final,
@@ -205,9 +211,16 @@ class AgentRuntime:
             "degraded": degraded,
             "fallback_reason": fallback_reason,
             "partial_results": outputs if degraded else [],
+            "memory_summary": memory_summary,
+            "applied_preferences": applied_preferences,
         }
 
-    def _explain(self, query: str, constraints: dict[str, Any], result: dict[str, Any], weather: dict[str, Any] | None = None) -> str:
+    def _explain(self, query: str, constraints: dict[str, Any], result: dict[str, Any], weather: dict[str, Any] | None = None,
+                 applied_preferences: list[dict[str, Any]] | None = None) -> str:
+        applied = [entry for entry in (applied_preferences or []) if entry["action"] == "applied"]
+        preference_suffix = ""
+        if applied:
+            preference_suffix = " Applied saved preferences: " + ", ".join(f"{entry['field']}={entry['value']}" for entry in applied) + "."
         if weather:
             facts = [f"{weather['location']} on {weather['date']}: {weather['temperature']}°C"]
             if weather.get("feels_like") is not None:
@@ -220,7 +233,7 @@ class AgentRuntime:
                 facts.append(str(weather["condition"]))
             derived = [item["constraint"] for item in result.get("constraint_summary", {}).get("derived_from_weather", [])]
             suffix = f" Derived suggestions: {', '.join(derived)}." if derived else ""
-            return "Weather used: " + ", ".join(facts) + f" Selected {len(result.get('selected_items', []))} item(s)." + suffix
+            return "Weather used: " + ", ".join(facts) + f" Selected {len(result.get('selected_items', []))} item(s)." + suffix + preference_suffix
         try:
             payload = self.planner.provider.complete_json(
                 system_prompt="Return JSON with one short recommendation_reason. Explain matches and gaps only; no chain-of-thought.",
@@ -229,7 +242,7 @@ class AgentRuntime:
             )
             reason = payload.get("recommendation_reason")
             if isinstance(reason, str) and reason.strip():
-                return reason.strip()
+                return reason.strip() + preference_suffix
         except Exception:
             pass
         selected = len(result.get("selected_items", []))
@@ -240,7 +253,53 @@ class AgentRuntime:
             reason += f" for {', '.join(supported)}"
         if missing:
             reason += f"; no suitable candidate was available for {', '.join(missing)}"
-        return reason + "."
+        return reason + "." + preference_suffix
+
+    @staticmethod
+    def _merge_preferences(query: str, constraints: RecommendationConstraints,
+                           preferences: UserPreferences | None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        if preferences is None:
+            return None, []
+        memory = model_dump(preferences)
+        explicit = Planner._extract_constraints(query)
+        applied: list[dict[str, Any]] = []
+
+        def use(field: str, value: Any) -> None:
+            if value not in (None, [], ""):
+                setattr(constraints, field, value)
+                applied.append({"field": field, "value": value, "action": "applied", "source": "memory"})
+
+        if explicit.colors:
+            conflicts = sorted(set(explicit.colors) & set(preferences.disliked_colors))
+            for value in conflicts:
+                applied.append({"field": "disliked_colors", "value": value, "action": "overridden_by_query", "source": "memory"})
+            constraints.disliked_colors = [value for value in preferences.disliked_colors if value not in explicit.colors] or None
+        else:
+            use("colors", preferences.preferred_colors)
+            constraints.disliked_colors = preferences.disliked_colors or None
+            if preferences.disliked_colors:
+                applied.append({"field": "disliked_colors", "value": preferences.disliked_colors, "action": "applied", "source": "memory"})
+        if explicit.style:
+            if explicit.style in preferences.disliked_styles:
+                applied.append({"field": "disliked_styles", "value": explicit.style, "action": "overridden_by_query", "source": "memory"})
+            constraints.disliked_styles = [value for value in preferences.disliked_styles if value != explicit.style] or None
+        else:
+            use("style", preferences.preferred_styles[0] if preferences.preferred_styles else None)
+            constraints.disliked_styles = preferences.disliked_styles or None
+            if preferences.disliked_styles:
+                applied.append({"field": "disliked_styles", "value": preferences.disliked_styles, "action": "applied", "source": "memory"})
+        if not explicit.categories:
+            use("categories", preferences.preferred_categories)
+        if explicit.budget is None:
+            use("budget", preferences.budget_max)
+            use("budget_min", preferences.budget_min)
+        else:
+            for field in ("budget_min", "budget_max"):
+                if memory[field] is not None:
+                    applied.append({"field": field, "value": memory[field], "action": "overridden_by_query", "source": "memory"})
+        summary = {key: value for key, value in memory.items() if key != "notes" and value not in (None, [], "")}
+        summary["found"] = True
+        return summary, applied
 
     @staticmethod
     def _derive_weather(weather: dict[str, Any]) -> list[dict[str, Any]]:

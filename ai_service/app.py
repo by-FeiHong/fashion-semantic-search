@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 import faiss
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
@@ -34,6 +34,7 @@ from ai_service.tools import (
 from ai_service.agent import AgentRuntime, Planner
 from ai_service.llm import LLMProvider, create_llm_provider
 from ai_service.weather import WeatherProvider, create_weather_provider
+from ai_service.memory import InMemoryUserPreferenceStore, UserPreferencePatch, UserPreferences, UserPreferenceStore, model_dump
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class AgentRequest(BaseModel):
     query: str = Field(min_length=1)
     max_steps: int | None = Field(default=None, ge=1, le=20)
     demo_mode: bool = False
+    user_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 def _path_from_env(name: str, default: Path) -> Path:
@@ -90,10 +92,12 @@ def create_app(
     registry: ToolRegistry | None = None,
     llm_provider: LLMProvider | None = None,
     weather_provider: WeatherProvider | None = None,
+    preference_store: UserPreferenceStore | None = None,
 ) -> FastAPI:
     tool_registry = registry or create_tool_registry()
     agent_runtime = AgentRuntime(tool_registry, Planner(llm_provider or create_llm_provider()))
     configured_weather_provider = weather_provider or create_weather_provider()
+    configured_preference_store = preference_store or InMemoryUserPreferenceStore()
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
         app.state.search_runtime = runtime_loader()
@@ -129,6 +133,23 @@ def create_app(
             ],
         }
 
+    @app.get("/memory/preferences/{user_id}")
+    def get_preferences(user_id: str) -> dict[str, object]:
+        preferences = configured_preference_store.get(user_id)
+        if preferences is None:
+            raise HTTPException(status_code=404, detail="User preferences not found")
+        return {"user_id": user_id, "preferences": model_dump(preferences)}
+
+    @app.put("/memory/preferences/{user_id}")
+    def put_preferences(user_id: str, preferences: UserPreferences) -> dict[str, object]:
+        stored = configured_preference_store.put(user_id, preferences)
+        return {"user_id": user_id, "preferences": model_dump(stored)}
+
+    @app.patch("/memory/preferences/{user_id}")
+    def patch_preferences(user_id: str, patch: UserPreferencePatch) -> dict[str, object]:
+        stored = configured_preference_store.patch(user_id, model_dump(patch, exclude_unset=True))
+        return {"user_id": user_id, "preferences": model_dump(stored)}
+
     @app.post("/tools/{name}/invoke", response_model=None)
     def invoke_tool(
         name: str,
@@ -154,6 +175,7 @@ def create_app(
             ToolContext(runtime, configured_weather_provider),
             agent_request.max_steps,
             agent_request.demo_mode,
+            configured_preference_store.get(agent_request.user_id) if agent_request.user_id else None,
         )
 
     return app

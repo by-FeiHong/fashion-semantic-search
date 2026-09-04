@@ -319,8 +319,9 @@ def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]
     constraints = {key: value for key, value in args.constraints.items() if value not in (None, [], "") and key not in {"source", "location", "date", "date_offset", "weather_intent"}}
     candidates = list(args.candidates)
     budget = float(constraints["budget"]) if "budget" in constraints else None
+    budget_min = float(constraints["budget_min"]) if "budget_min" in constraints else None
     real_prices_available = bool(candidates) and all(record.get("price") not in (None, "") for record in candidates)
-    budget_supported = budget is not None and (args.demo_mode or real_prices_available)
+    budget_supported = (budget is not None or budget_min is not None) and (args.demo_mode or real_prices_available)
     if budget_supported and args.demo_mode:
         candidates = [{**record, "price": record.get("price") or _demo_price(record),
                        "price_source": "real" if record.get("price") not in (None, "") else "synthetic_demo"} for record in candidates]
@@ -346,13 +347,23 @@ def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]
             else:
                 supported.add(key)
                 components[key] = round(0.075 * sum(str(v).casefold() in explicit for v in values) / len(values), 4)
+        for key, names in {"disliked_colors": ("color", "colors", "description", "name"),
+                           "disliked_styles": ("style", "description", "name")}.items():
+            disliked = constraints.get(key) or []
+            explicit = _field_text(record, names)
+            matches = [value for value in disliked if str(value).casefold() in explicit]
+            if matches:
+                supported.add(key)
+                components[key] = -0.2
         return round(sum(components.values()), 4), components, item_unsupported
 
     for requested in args.categories:
         wanted = requested.strip().casefold()
         pool = [(record, _canonical_category(record)) for record in candidates if str(record.get("item_id", record.get("image_path", id(record)))) not in used]
-        if budget_supported and remaining_budget is not None:
-            pool = [(record, category) for record, category in pool if float(record["price"]) <= remaining_budget]
+        if budget_supported:
+            pool = [(record, category) for record, category in pool
+                    if (remaining_budget is None or float(record["price"]) <= remaining_budget)
+                    and (budget_min is None or float(record["price"]) >= budget_min)]
         matches = [(record, category) for record, category in pool if category == wanted]
         if not matches:
             matches = [(record, category) for record, category in pool if category in _SUBSTITUTES.get(wanted, ())]
@@ -368,7 +379,7 @@ def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]
             used.add(str(match.get("item_id", match.get("image_path", id(match)))))
             if budget_supported and remaining_budget is not None:
                 remaining_budget -= float(match["price"])
-    if "budget" in constraints:
+    if "budget" in constraints or "budget_min" in constraints:
         if budget_supported:
             supported.add("budget")
         else:
