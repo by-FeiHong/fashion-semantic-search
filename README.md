@@ -292,6 +292,22 @@ $env:FASHION_SEARCH_AI_READ_TIMEOUT = "10s"
 mvn spring-boot:run
 ```
 
+### API documentation
+
+The two HTTP services publish separate, runtime-generated API documentation:
+
+| Service | Interactive documentation | OpenAPI document |
+| --- | --- | --- |
+| Spring Boot (local/default Docker port) | `http://localhost:8080/swagger-ui/index.html` | `http://localhost:8080/v3/api-docs` |
+| Spring Boot (Docker port override example) | `http://localhost:18080/swagger-ui/index.html` | `http://localhost:18080/v3/api-docs` |
+| FastAPI | `http://localhost:8000/docs` | `http://localhost:8000/openapi.json` |
+
+Springdoc also accepts `http://localhost:8080/swagger-ui.html` and redirects to
+the Java Swagger UI. If Compose uses a different `SPRING_BOOT_PORT_HOST`, replace
+`8080` with that host port; the container still listens on port 8080. The Java
+document covers `/api/health`, `/api/search`, and `/api/stats`. Agent, memory,
+and tool endpoints live only in FastAPI and are documented only by FastAPI.
+
 The Python service also supports `FASHION_SEARCH_INDEX_PATH`,
 `FASHION_SEARCH_METADATA_PATH`, `FASHION_SEARCH_DETAILS_PATH`,
 `FASHION_SEARCH_MODEL_NAME`, and `FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD`.

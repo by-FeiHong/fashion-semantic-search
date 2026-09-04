@@ -14,9 +14,16 @@ import com.feihong.fashionsearch.common.ApiResponse;
 import com.feihong.fashionsearch.dto.SearchRequest;
 import com.feihong.fashionsearch.dto.SearchResult;
 import com.feihong.fashionsearch.service.SearchService;
+import com.feihong.fashionsearch.config.OpenApiSchemas;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @RequestMapping("/api")
+@Tag(name = "Search", description = "Semantic fashion search")
 public class SearchController {
     private static final Logger log = LoggerFactory.getLogger(SearchController.class);
 
@@ -27,6 +34,30 @@ public class SearchController {
     }
 
     @PostMapping("/search")
+    @Operation(
+            summary = "Search fashion items",
+            description = "Ranks fashion items by semantic similarity to a natural-language query. "
+                    + "The response keeps the standard ApiResponse envelope.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Ranked search results",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.SearchApiResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "Invalid query or topK value",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.ErrorApiResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "502", description = "AI search service returned an invalid or failed response",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.ErrorApiResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503", description = "AI search service is unavailable",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.ErrorApiResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "504", description = "AI search service timed out",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.ErrorApiResponse.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "500", description = "Unexpected server error",
+                    content = @Content(schema = @Schema(implementation = OpenApiSchemas.ErrorApiResponse.class)))
+    })
     public ApiResponse<List<SearchResult>> search(
             @Valid @RequestBody SearchRequest request
     ) {
