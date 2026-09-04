@@ -1,5 +1,7 @@
 # Fashion Semantic Search
 
+[![CI](https://github.com/by-FeiHong/fashion-semantic-search/actions/workflows/ci.yml/badge.svg)](https://github.com/by-FeiHong/fashion-semantic-search/actions/workflows/ci.yml)
+
 An AI-powered fashion search engine using semantic embeddings and vector search.
 
 ## Docker Compose one-command stack

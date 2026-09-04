@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests and compile check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Run Python tests
+        run: python -m pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q ai_service app.py scripts tests
+
+  java:
+    name: Java tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java-backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: java-backend/pom.xml
+
+      - name: Run Java tests
+        run: mvn --batch-mode --no-transfer-progress test
+
+  docker-config:
+    name: Docker Compose configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare CI environment file
+        run: |
+          cp .env.example .env
+          sed -i 's|^FASHION_SEARCH_MODEL_CACHE_HOST_PATH=.*|FASHION_SEARCH_MODEL_CACHE_HOST_PATH=./models|' .env
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
