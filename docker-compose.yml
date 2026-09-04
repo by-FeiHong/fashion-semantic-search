@@ -1,0 +1,98 @@
+name: fashion-semantic-search
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fashion_search}
+      MYSQL_USER: ${MYSQL_USERNAME:-fashion_search}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-root-me}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - fashion-search
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - fashion-search
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: ai_service/Dockerfile
+    restart: unless-stopped
+    environment:
+      FASHION_SEARCH_INDEX_PATH: /app/data/processed/fashion.index
+      FASHION_SEARCH_METADATA_PATH: /app/data/processed/metadata_index.csv
+      FASHION_SEARCH_DETAILS_PATH: /app/data/processed/metadata.csv
+      FASHION_SEARCH_MODEL_NAME: ${FASHION_SEARCH_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD: ${FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD:-false}
+      HF_HOME: /models
+      TRANSFORMERS_CACHE: /models/hub
+    ports:
+      - "${FASTAPI_PORT_HOST:-8000}:8000"
+    volumes:
+      - ${FASHION_SEARCH_DATA_HOST_PATH:-./data}:/app/data:ro
+      - ${FASHION_SEARCH_MODEL_CACHE_HOST_PATH:-./models}:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - fashion-search
+
+  spring-boot:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fashion_search}
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-fashion_search}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FASHION_SEARCH_AI_BASE_URL: http://fastapi:8000
+    ports:
+      - "${SPRING_BOOT_PORT_HOST:-8080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      fastapi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - fashion-search
+
+volumes:
+  mysql_data:
+
+networks:
+  fashion-search:
+    driver: bridge

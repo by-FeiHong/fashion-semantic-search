@@ -1,0 +1,16 @@
+.git/
+.agents/
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+data/
+models/
+java-backend/
+app/
+assets/
+docs/
+tests/
+*.pyc
+*.log
+.env

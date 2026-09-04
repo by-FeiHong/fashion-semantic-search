@@ -2,6 +2,80 @@
 
 An AI-powered fashion search engine using semantic embeddings and vector search.
 
+## Docker Compose one-command stack
+
+The Compose stack starts MySQL, Redis, the FastAPI AI service, and Spring Boot on
+one private network. Spring Boot uses the service names `mysql`, `redis`, and
+`fastapi`; its existing non-Docker defaults still use `localhost`. MySQL and
+Redis are not published to the host, while the two HTTP APIs remain available
+on ports 8080 and 8000 by default.
+
+Large FAISS, metadata, and model files are not copied into either image. The
+`data` directory and Hugging Face cache are mounted read-only from the host.
+Before the first start, copy the example environment file and set real passwords
+and the path to the existing model cache:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose config
+docker compose up --build -d
+docker compose ps
+```
+
+If port 8080 or 8000 is already in use, set an override in `.env` (for example,
+`SPRING_BOOT_PORT_HOST=18080`) or for the current PowerShell session:
+
+```powershell
+$env:SPRING_BOOT_PORT_HOST = "18080"
+docker compose up -d
+Invoke-RestMethod http://localhost:18080/api/health
+```
+
+On Windows, use forward slashes for an absolute cache path in `.env`, for example
+`C:/Users/alice/.cache/huggingface`. The mounted cache must contain
+`sentence-transformers/all-MiniLM-L6-v2`; otherwise set
+`FASHION_SEARCH_ALLOW_MODEL_DOWNLOAD=true` and use a writable model mount, or
+download the model before starting. The default data mount expects:
+
+```text
+data/processed/fashion.index
+data/processed/metadata_index.csv
+data/processed/metadata.csv
+```
+
+Compose waits for MySQL, Redis, and FastAPI health checks before starting Spring
+Boot. Once all four services are healthy, verify the public API from PowerShell:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/health
+Invoke-RestMethod http://localhost:8080/api/search -Method Post `
+  -ContentType "application/json" `
+  -Body '{"query":"minimal black dress","topK":5}'
+```
+
+Useful lifecycle commands:
+
+```powershell
+# Follow every service, or only one service
+docker compose logs -f
+docker compose logs -f fastapi
+
+# Stop containers while preserving the MySQL named volume
+docker compose down
+
+# Rebuild images and recreate containers after code changes
+docker compose up --build --force-recreate -d
+
+# Remove containers and the persistent MySQL data (destructive)
+docker compose down --volumes
+```
+
+The named volume is `fashion-semantic-search_mysql_data` by default. `docker
+compose down` preserves it; `docker compose down --volumes` permanently removes
+the database data. Do not commit `.env`; only `.env.example` is intended for
+version control.
+
 ## Features
 
 - Natural language search
