@@ -7,9 +7,12 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Callable, Protocol, get_type_hints
 
 from pydantic import BaseModel, Field, ValidationError
+
+from ai_service.weather import WeatherProvider, WeatherProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,7 @@ class ToolValidationError(ToolError):
 @dataclass(frozen=True)
 class ToolContext:
     runtime: SearchRuntimeProtocol
+    weather_provider: WeatherProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +174,37 @@ class BuildOutfitInput(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     query: str | None = None
     demo_mode: bool = False
+    weather_context: dict[str, Any] | None = None
+    derived_from_weather: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WeatherLookupInput(BaseModel):
+    location: str = Field(min_length=1)
+    date: str | None = None
+    date_offset: int | None = Field(default=None, ge=0, le=14)
+
+
+@tool(description="Look up normalized weather for a location and date through the configured provider.")
+def weather_lookup(args: WeatherLookupInput, context: ToolContext) -> dict[str, Any]:
+    if context.weather_provider is None:
+        raise WeatherProviderError("Weather provider is unavailable")
+    try:
+        target = date.fromisoformat(args.date) if args.date else date.today() + timedelta(days=args.date_offset or 0)
+    except ValueError as exc:
+        raise ToolValidationError("date must use YYYY-MM-DD") from exc
+    try:
+        values = context.weather_provider.lookup(location=args.location.strip(), target_date=target)
+    except WeatherProviderError as exc:
+        raise ToolError(str(exc)) from exc
+    return {
+        "location": args.location.strip(), "date": target.isoformat(),
+        "temperature": values.get("temperature"), "feels_like": values.get("feels_like"),
+        "precipitation": values.get("precipitation"), "rain": values.get("rain"),
+        "wind": values.get("wind"), "condition": values.get("condition"),
+        "source": values.get("source", "weather_provider"),
+        "provider": values.get("provider", context.weather_provider.name),
+        "result_count": 1,
+    }
 
 
 class OutfitItem(BaseModel):
@@ -281,7 +316,7 @@ def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]
     missing: list[str] = []
     substitutions: dict[str, str] = {}
     used: set[str] = set()
-    constraints = {key: value for key, value in args.constraints.items() if value not in (None, [], "") and key != "source"}
+    constraints = {key: value for key, value in args.constraints.items() if value not in (None, [], "") and key not in {"source", "location", "date", "date_offset", "weather_intent"}}
     candidates = list(args.candidates)
     budget = float(constraints["budget"]) if "budget" in constraints else None
     real_prices_available = bool(candidates) and all(record.get("price") not in (None, "") for record in candidates)
@@ -340,7 +375,8 @@ def build_outfit(args: BuildOutfitInput, context: ToolContext) -> dict[str, Any]
             unsupported.add("budget")
     scores = [item.score for item in selected]
     result = RecommendationResult(selected_items=selected, missing_categories=missing, substitutions=substitutions,
-        constraint_summary={"requested": constraints, "supported": sorted(supported), "unsupported": sorted(unsupported)},
+        constraint_summary={"requested": constraints, "supported": sorted(supported), "unsupported": sorted(unsupported),
+                            "derived_from_weather": args.derived_from_weather},
         score_summary={"overall": round(sum(scores) / len(scores), 4) if scores else 0.0, "item_scores": scores,
                        "total_price": round((budget - remaining_budget), 2) if budget_supported and budget is not None and remaining_budget is not None else None,
                        "method": "deterministic_weighted_v1"}, complete=not missing, result_count=len(selected))
@@ -356,6 +392,6 @@ def _validate_dump(model: BaseModel) -> dict[str, Any]:
 
 def create_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    for definition in (semantic_search, filter_by_category, filter_by_price, build_outfit):
+    for definition in (semantic_search, filter_by_category, filter_by_price, weather_lookup, build_outfit):
         registry.register(definition)
     return registry

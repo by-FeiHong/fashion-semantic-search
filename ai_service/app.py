@@ -33,6 +33,7 @@ from ai_service.tools import (
 )
 from ai_service.agent import AgentRuntime, Planner
 from ai_service.llm import LLMProvider, create_llm_provider
+from ai_service.weather import WeatherProvider, create_weather_provider
 
 
 @dataclass(frozen=True)
@@ -88,9 +89,11 @@ def create_app(
     runtime_loader: Callable[[], SearchRuntime] = load_runtime,
     registry: ToolRegistry | None = None,
     llm_provider: LLMProvider | None = None,
+    weather_provider: WeatherProvider | None = None,
 ) -> FastAPI:
     tool_registry = registry or create_tool_registry()
     agent_runtime = AgentRuntime(tool_registry, Planner(llm_provider or create_llm_provider()))
+    configured_weather_provider = weather_provider or create_weather_provider()
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
         app.state.search_runtime = runtime_loader()
@@ -133,7 +136,7 @@ def create_app(
         runtime: SearchRuntime = Depends(get_runtime),
     ) -> JSONResponse | dict[str, object]:
         try:
-            return tool_registry.invoke(name, arguments, ToolContext(runtime))
+            return tool_registry.invoke(name, arguments, ToolContext(runtime, configured_weather_provider))
         except UnknownToolError as exc:
             return JSONResponse(status_code=404, content=_tool_error(name, exc))
         except ToolValidationError as exc:
@@ -148,7 +151,7 @@ def create_app(
     ) -> dict[str, object]:
         return agent_runtime.recommend(
             agent_request.query,
-            ToolContext(runtime),
+            ToolContext(runtime, configured_weather_provider),
             agent_request.max_steps,
             agent_request.demo_mode,
         )

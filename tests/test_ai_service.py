@@ -52,7 +52,7 @@ def test_tools_endpoints_list_invoke_and_return_structured_errors() -> None:
         listing = client.get("/tools")
         assert listing.status_code == 200
         assert {item["name"] for item in listing.json()["tools"]} == {
-            "semantic_search", "filter_by_category", "filter_by_price", "build_outfit"
+            "semantic_search", "filter_by_category", "filter_by_price", "weather_lookup", "build_outfit"
         }
         success = client.post(
             "/tools/semantic_search/invoke",

@@ -499,3 +499,95 @@ occasions. Missing attributes are reported as `unsupported` and never invented. 
 hard cumulative constraint only when real prices are available for the candidate set, or
 when the request explicitly sends `"demo_mode": true`; synthetic demo prices are clearly
 marked `price_source=synthetic_demo`.
+
+## Weather-aware recommendations
+
+The single-agent runtime can enrich requests such as `What should I wear in Lund tomorrow?`
+or `哥本哈根后天通勤穿搭` through a provider-neutral `WeatherProvider`. The orchestration is:
+
+```text
+query -> Planner + deterministic location/date extraction
+      -> weather_lookup -> normalized weather context
+      -> deterministic weather-derived suggestions
+      -> semantic_search -> build_outfit -> factual recommendation_reason
+```
+
+No agent framework or multi-agent system is used. `weather_lookup` is also listed by
+`GET /tools` and may be invoked directly. Its input requires `location` and accepts either a
+`date` in `YYYY-MM-DD` form or a `date_offset` from 0 through 14. Its normalized response
+includes the usable `temperature`, `feels_like`, `precipitation`, `rain`, `wind`, and
+`condition` fields, plus `source` and `provider` metadata.
+
+Weather is disabled by default. A generic JSON HTTP adapter can be configured without
+changing planner, tool, or recommendation code:
+
+```powershell
+$env:FASHION_WEATHER_PROVIDER = "http"
+$env:FASHION_WEATHER_BASE_URL = "https://weather.example/v1/forecast"
+$env:FASHION_WEATHER_API_KEY = "replace-with-secret"
+$env:FASHION_WEATHER_TIMEOUT_SECONDS = "5"
+```
+
+The adapter sends `location`, `date`, and, when configured, `api_key` query parameters. It
+accepts a top-level record or a `weather`, `current`, or `forecast` record and normalizes
+common JSON names such as `temp_c`, `feelslike_c`, `rain_mm`, and `wind_mps`. This deliberately
+small contract also makes it straightforward to place a vendor-specific gateway in front of
+the service. API keys are read from configuration only and are never included in tool output.
+
+Example request:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/agent/recommend `
+  -Method Post -ContentType "application/json" `
+  -Body '{"query":"明天 Lund 穿什么","max_steps":6}'
+```
+
+Example weather portion of the response:
+
+```json
+{
+  "recommendation": {
+    "weather_context": {
+      "location": "lund",
+      "date": "2026-09-05",
+      "temperature": 7,
+      "feels_like": 5,
+      "precipitation": 1.2,
+      "wind": 8,
+      "condition": "light rain",
+      "source": "weather_provider",
+      "provider": "http"
+    },
+    "constraint_summary": {
+      "derived_from_weather": [
+        {"constraint": "outerwear", "rule": "temperature_lte_10c", "value": 7},
+        {"constraint": "rain_protection", "rule": "precipitation_gt_0", "value": 1.2}
+      ]
+    },
+    "recommendation_reason": "Weather used: lund on 2026-09-05: 7°C, feels like 5°C, precipitation 1.2 mm, wind 8 m/s, light rain. Selected 4 item(s). Derived suggestions: outerwear, rain_protection."
+  }
+}
+```
+
+Weather-derived behavior is deterministic and advisory:
+
+- temperature at or below 10°C adds an `outerwear` category request;
+- temperature at or below 5°C adds a `layering` suggestion;
+- precipitation above 0 mm (or an explicit rain flag) adds `rain_protection`;
+- wind at or above 10 m/s adds `wind_protection`.
+
+Only the `outerwear` rule changes category composition. Layering, rain, and wind suggestions
+are reported under `derived_from_weather`; they do not award fictitious item scores because
+DeepFashion does not provide reliable weather-protection attributes. The weather explanation
+is built from the normalized provider values rather than generated freely by an LLM.
+
+If weather is disabled, times out, fails, or returns no usable temperature, the response is
+marked `degraded`, `fallback_reason` records `weather_lookup_failed`, and recommendation
+continues without weather. Existing `/health`, `/search`, `/tools`, and `/agent/recommend`
+contracts remain compatible apart from the additive tool and response fields.
+
+Location and requested date are sent to the configured weather endpoint. Treat them as
+potentially sensitive, choose a provider with suitable retention terms, avoid embedding
+personal addresses in queries, and use TLS. Forecast accuracy, units, location resolution,
+and supported forecast range depend on the configured provider; the generic adapter assumes
+temperature in °C, precipitation in mm, and wind in m/s after any vendor-side normalization.

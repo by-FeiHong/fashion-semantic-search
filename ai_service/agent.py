@@ -14,7 +14,7 @@ from ai_service.tools import ToolContext, ToolError, ToolRegistry
 
 
 class ToolCall(BaseModel):
-    tool: Literal["semantic_search", "filter_by_category", "filter_by_price", "build_outfit"]
+    tool: Literal["semantic_search", "filter_by_category", "filter_by_price", "weather_lookup", "build_outfit"]
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -26,6 +26,10 @@ class RecommendationConstraints(BaseModel):
     budget: float | None = Field(default=None, ge=0)
     categories: list[str] | None = None
     source: str | None = None
+    location: str | None = None
+    date: str | None = None
+    date_offset: int | None = Field(default=None, ge=0, le=14)
+    weather_intent: bool = False
 
 
 class Plan(BaseModel):
@@ -53,14 +57,21 @@ class Planner:
             payload = self.provider.complete_json(
                 system_prompt=(
                     "Return only a JSON object with intent, constraints and tool_calls. Constraints "
-                    "may contain season, occasion, colors (array), style, budget (number), and categories (array). "
+                    "may contain season, occasion, colors (array), style, budget (number), categories (array), "
+                    "location, date (YYYY-MM-DD), date_offset, and weather_intent. "
                     "Each tool call has tool and arguments. Available tools: semantic_search, "
-                    "filter_by_category, filter_by_price, build_outfit. Use '$last' for candidates "
+                    "filter_by_category, filter_by_price, weather_lookup, build_outfit. Use '$last' for candidates "
                     "from the latest successful list-like tool result. Never invent product data."
                 ),
                 user_prompt=query,
             )
-            return _validate_plan(payload), False, None
+            plan = _validate_plan(payload)
+            extracted = self._extract_constraints(query)
+            for field in ("location", "date", "date_offset"):
+                if getattr(plan.constraints, field) is None:
+                    setattr(plan.constraints, field, getattr(extracted, field))
+            plan.constraints.weather_intent = plan.constraints.weather_intent or extracted.weather_intent
+            return plan, False, None
         except Exception:
             return self.deterministic_plan(query), True, "llm_unavailable_or_invalid_plan"
 
@@ -90,8 +101,18 @@ class Planner:
         found_categories = [key for key, words in category_terms.items() if any(word in text for word in words)] or None
         budget_match = re.search(r"(?:budget|预算|under|以内|不超过)\s*[:：$¥￥]?\s*(\d+(?:\.\d+)?)|(?:[$¥￥])\s*(\d+(?:\.\d+)?)", text)
         budget = float(next(group for group in budget_match.groups() if group)) if budget_match else None
+        date_offset = 2 if any(word in text for word in ("day after tomorrow", "后天")) else 1 if any(word in text for word in ("tomorrow", "明天")) else None
+        explicit_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+        known_locations = {"lund": ("lund", "隆德"), "Copenhagen": ("copenhagen", "哥本哈根")}
+        location = next((canonical for canonical, words in known_locations.items() if any(word.casefold() in text for word in words)), None)
+        if location is None:
+            english = re.search(r"(?:in|at)\s+(\S+)", query, re.IGNORECASE)
+            location = english.group(1).strip(".,!?;:") if english else None
+        weather_intent = bool(location and date_offset is not None) or any(word in text for word in ("weather", "forecast", "temperature", "rain", "wind", "天气", "气温", "下雨", "大风", "穿什么"))
         return RecommendationConstraints(season=pick(seasons), occasion=pick(occasions), colors=found_colors or None,
                                          style=pick(styles), budget=budget, categories=found_categories,
+                                         location=location, date=explicit_date.group(1) if explicit_date else None,
+                                         date_offset=date_offset, weather_intent=weather_intent,
                                          source="deterministic_fallback")
 
 
@@ -109,11 +130,37 @@ class AgentRuntime:
         outputs: list[dict[str, Any]] = []
         seen: set[str] = set()
         last_candidates: list[dict[str, Any]] = []
+        weather_context: dict[str, Any] | None = None
+        derived_weather: list[dict[str, Any]] = []
+
+        if plan.constraints.location and (plan.constraints.weather_intent or plan.constraints.date or plan.constraints.date_offset is not None):
+            weather_args = {"location": plan.constraints.location}
+            if plan.constraints.date:
+                weather_args["date"] = plan.constraints.date
+            if plan.constraints.date_offset is not None:
+                weather_args["date_offset"] = plan.constraints.date_offset
+            started = time.perf_counter()
+            try:
+                weather_context = self.registry.invoke("weather_lookup", weather_args, context)["data"]
+                derived_weather = self._derive_weather(weather_context)
+                trace.append({"tool": "weather_lookup", "elapsed_ms": round((time.perf_counter() - started) * 1000, 2), "status": "success"})
+            except ToolError as exc:
+                degraded = True
+                weather_reason = f"weather_lookup_failed:{exc.error_type}"
+                fallback_reason = f"{fallback_reason};{weather_reason}" if fallback_reason else weather_reason
+                trace.append({"tool": "weather_lookup", "elapsed_ms": round((time.perf_counter() - started) * 1000, 2), "status": f"failed:{exc.error_type}"})
+
+        categories = list(plan.constraints.categories or ["top", "bottom", "shoes"])
+        if any(rule["constraint"] == "outerwear" for rule in derived_weather) and "outerwear" not in categories:
+            categories.append("outerwear")
 
         for call in plan.tool_calls[:limit]:
             arguments = self._resolve(call.arguments, last_candidates)
             if call.tool == "build_outfit":
-                arguments = {**arguments, "constraints": constraints, "query": query, "demo_mode": demo_mode}
+                arguments = {**arguments, "categories": categories, "constraints": constraints, "query": query, "demo_mode": demo_mode,
+                             "weather_context": weather_context, "derived_from_weather": derived_weather}
+            if call.tool == "weather_lookup":
+                continue
             signature = json.dumps({"tool": call.tool, "arguments": arguments}, sort_keys=True, default=str)
             if signature in seen:
                 trace.append({"tool": call.tool, "elapsed_ms": 0.0, "status": "skipped_duplicate"})
@@ -139,16 +186,17 @@ class AgentRuntime:
             fallback_reason = fallback_reason or "max_steps_reached"
         final = next((item["data"] for item in reversed(outputs) if item["tool"] == "build_outfit"), None)
         if final is None:
-            categories = plan.constraints.categories or ["top", "bottom", "shoes"]
             try:
                 final = self.registry.invoke("build_outfit", {"candidates": last_candidates, "categories": categories,
-                    "constraints": constraints, "query": query, "demo_mode": demo_mode}, context)["data"]
+                    "constraints": constraints, "query": query, "demo_mode": demo_mode, "weather_context": weather_context,
+                    "derived_from_weather": derived_weather}, context)["data"]
                 outputs.append({"tool": "build_outfit", "data": final})
             except ToolError:
                 final = None
                 degraded = True
         if isinstance(final, dict):
-            final["recommendation_reason"] = self._explain(query, constraints, final)
+            final["weather_context"] = weather_context
+            final["recommendation_reason"] = self._explain(query, constraints, final, weather_context)
         return {
             "success": bool(outputs),
             "recommendation": final,
@@ -159,7 +207,20 @@ class AgentRuntime:
             "partial_results": outputs if degraded else [],
         }
 
-    def _explain(self, query: str, constraints: dict[str, Any], result: dict[str, Any]) -> str:
+    def _explain(self, query: str, constraints: dict[str, Any], result: dict[str, Any], weather: dict[str, Any] | None = None) -> str:
+        if weather:
+            facts = [f"{weather['location']} on {weather['date']}: {weather['temperature']}°C"]
+            if weather.get("feels_like") is not None:
+                facts.append(f"feels like {weather['feels_like']}°C")
+            if weather.get("precipitation") is not None:
+                facts.append(f"precipitation {weather['precipitation']} mm")
+            if weather.get("wind") is not None:
+                facts.append(f"wind {weather['wind']} m/s")
+            if weather.get("condition"):
+                facts.append(str(weather["condition"]))
+            derived = [item["constraint"] for item in result.get("constraint_summary", {}).get("derived_from_weather", [])]
+            suffix = f" Derived suggestions: {', '.join(derived)}." if derived else ""
+            return "Weather used: " + ", ".join(facts) + f" Selected {len(result.get('selected_items', []))} item(s)." + suffix
         try:
             payload = self.planner.provider.complete_json(
                 system_prompt="Return JSON with one short recommendation_reason. Explain matches and gaps only; no chain-of-thought.",
@@ -180,6 +241,22 @@ class AgentRuntime:
         if missing:
             reason += f"; no suitable candidate was available for {', '.join(missing)}"
         return reason + "."
+
+    @staticmethod
+    def _derive_weather(weather: dict[str, Any]) -> list[dict[str, Any]]:
+        rules: list[dict[str, Any]] = []
+        temperature = float(weather["temperature"])
+        if temperature <= 10:
+            rules.append({"constraint": "outerwear", "rule": "temperature_lte_10c", "value": temperature})
+        if temperature <= 5:
+            rules.append({"constraint": "layering", "rule": "temperature_lte_5c", "value": temperature})
+        precipitation = weather.get("precipitation")
+        rain = weather.get("rain")
+        if (precipitation is not None and float(precipitation) > 0) or rain is True:
+            rules.append({"constraint": "rain_protection", "rule": "precipitation_gt_0", "value": precipitation})
+        if weather.get("wind") is not None and float(weather["wind"]) >= 10:
+            rules.append({"constraint": "wind_protection", "rule": "wind_gte_10mps", "value": weather["wind"]})
+        return rules
 
     @staticmethod
     def _resolve(value: Any, last_candidates: list[dict[str, Any]]) -> Any:
